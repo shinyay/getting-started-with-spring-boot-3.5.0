@@ -74,19 +74,169 @@ management.endpoint.health:
 | **Metrics** | Micrometer 1.14                  | JVM/HTTP/DB など 250+ 系列を収集、Prometheus/OTel へエクスポート ([github.com][4]) |
 | **Tracing** | Micrometer Tracing 1.4           | W3C Trace‑Context が既定、`Baggage` で属性伝搬 ([spring.io][5])              |
 
-### 6‑2‑1　構造化ログ設定
+### 6‑2‑1　構造化ログ設定と ECS 準拠
+
+Spring Boot 3.5 では **構造化ログ** により、従来のテキストログを JSON 形式で出力し、ログ解析システムとの連携を強化できます。
+
+**基本設定**：
 
 ```yaml
 logging:
   structured:
     json:
+      format: ecs  # Elastic Common Schema 準拠
       field-names:
-        level: severity
+        timestamp: "@timestamp"
+        level: log.level
+        logger: log.logger
+        message: message
+        thread: process.thread.name
       stacktrace:
-        max-length: 20
+        max-length: 4000
+        
+# ログレベル設定
+  level:
+    org.springframework.web: DEBUG
+    com.example.demo: INFO
 ```
 
-*ECS (Elastic Common Schema) フォーマット* も `logging.structured.json.format=ecs` で一発切替。([github.com][3])
+**ECS 準拠 JSON ログ出力例**：
+
+```json
+{
+  "@timestamp": "2025-06-14T10:30:45.123Z",
+  "log.level": "INFO",
+  "log.logger": "com.example.demo.web.UserController",
+  "message": "User created successfully",
+  "process.thread.name": "http-nio-8080-exec-1",
+  "trace.id": "abc123def456789",
+  "span.id": "789def123abc456",
+  "user.id": "user-12345",
+  "request.method": "POST",
+  "url.path": "/api/users",
+  "http.response.status_code": 201,
+  "event.duration": 245000000,
+  "labels": {
+    "application": "demo-service",
+    "environment": "production",
+    "version": "1.0.0"
+  }
+}
+```
+
+**アプリケーション内でのコンテキスト追加**：
+
+```java
+package com.example.demo.web;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/users")
+public class UserController {
+    
+    private static final Logger logger = LoggerFactory.getLogger(UserController.class);
+    
+    @PostMapping
+    public ResponseEntity<User> createUser(@RequestBody CreateUserRequest request) {
+        // MDC でコンテキスト情報を追加
+        MDC.put("user.email", request.getEmail());
+        MDC.put("request.method", "POST");
+        MDC.put("operation", "create_user");
+        
+        try {
+            User user = userService.createUser(request);
+            
+            // 構造化ログとして出力
+            logger.info("User created successfully", 
+                Map.of(
+                    "user.id", user.getId(),
+                    "user.username", user.getUsername(),
+                    "http.response.status_code", 201
+                ));
+            
+            return ResponseEntity.status(201).body(user);
+            
+        } catch (ValidationException e) {
+            logger.warn("User creation failed due to validation", 
+                Map.of(
+                    "error.type", "validation_error",
+                    "error.message", e.getMessage(),
+                    "http.response.status_code", 400
+                ));
+            throw e;
+            
+        } finally {
+            // MDC をクリア（メモリリーク防止）
+            MDC.clear();
+        }
+    }
+}
+```
+
+**カスタム JSON レイアウト（高度な設定）**：
+
+```xml
+<!-- logback-spring.xml -->
+<configuration>
+    <springProfile name="!local">
+        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+                <providers>
+                    <timestamp>
+                        <pattern>yyyy-MM-dd'T'HH:mm:ss.SSSZZ</pattern>
+                        <fieldName>@timestamp</fieldName>
+                    </timestamp>
+                    <logLevel>
+                        <fieldName>log.level</fieldName>
+                    </logLevel>
+                    <loggerName>
+                        <fieldName>log.logger</fieldName>
+                    </loggerName>
+                    <message/>
+                    <mdc/>
+                    <arguments/>
+                    <stackTrace>
+                        <fieldName>error.stack_trace</fieldName>
+                    </stackTrace>
+                    <!-- ECS 標準フィールド -->
+                    <pattern>
+                        <pattern>
+                        {
+                            "service.name": "demo-service",
+                            "service.version": "${SERVICE_VERSION:-unknown}",
+                            "host.name": "${HOSTNAME:-unknown}",
+                            "labels": {
+                                "environment": "${SPRING_PROFILES_ACTIVE:-development}"
+                            }
+                        }
+                        </pattern>
+                    </pattern>
+                </providers>
+            </encoder>
+        </appender>
+        
+        <root level="INFO">
+            <appender-ref ref="STDOUT"/>
+        </root>
+    </springProfile>
+    
+    <!-- ローカル開発時は従来の形式 -->
+    <springProfile name="local">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <root level="DEBUG">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+</configuration>
+```
 
 ### 6‑2‑2　Prometheus 連携
 
@@ -94,7 +244,7 @@ logging:
 2. `/actuator/prometheus` を公開し、Prometheus `scrape_configs` にパスを登録。
 3. `management.metrics.distribution.percentiles-histogram.http.server.requests=true` で **レイテンシ分位数** を取得。([docs.spring.io][1])
 
-### 6‑2‑3　OpenTelemetry でのトレーシング
+### 6‑2‑3　分散トレーシング ― Grafana Tempo / Zipkin 連携
 
 ```yaml
 management:
@@ -103,6 +253,61 @@ management:
 ```
 
 `micrometer-tracing-bridge-otel` と `opentelemetry-exporter-otlp` を追加すると、**OTLP gRPC** でコレクターへ即送信される。Context Propagation は自動設定。([spring.io][5])
+**基本設定（Zipkin）**：
+
+```yaml
+management:
+  tracing:
+    sampling:
+      probability: 0.1  # 本番環境では 10% 程度に抑制
+    zipkin:
+      endpoint: http://zipkin:9411/api/v2/spans
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,traces
+        
+spring:
+  application:
+    name: demo-service  # トレース内でのサービス識別用
+```
+
+**Grafana Tempo 連携設定**：
+
+```yaml
+management:
+  tracing:
+    sampling:
+      probability: 0.2
+  otlp:
+    tracing:
+      endpoint: http://tempo:4317  # OTLP gRPC エンドポイント
+```
+
+**カスタムスパンとアノテーション**：
+
+```java
+@Service
+public class OrderService {
+    
+    @Autowired
+    private Tracer tracer;
+    
+    @Observed(name = "order.processing")
+    public Order processOrder(OrderRequest request) {
+        Span span = tracer.nextSpan()
+            .name("order.validation")
+            .tag("order.id", request.getOrderId())
+            .start();
+            
+        try (Tracer.SpanInScope ws = tracer.withSpanInScope(span)) {
+            return createOrder(request);
+        } finally {
+            span.end();
+        }
+    }
+}
+```
 
 ---
 
@@ -209,6 +414,110 @@ curl http://localhost:9000/actuator/startup | jq '.timeline[] | {bean:.name,dura
 2. **Health が DOWN から復帰しない** → キャッシュされている可能性。`management.endpoint.health.cache.time-to-live=10s` を調整。
 3. **Prometheus でメモリリーク** → High‑cardinality タグを削減、`MeterFilter.deny(id -> id.getTag("userId") != null)` を実装。
 4. **Structured Logging でフィールド欠落** → JSON レイアウト変更後は *必ず* ログパイプライン側でスキーマを更新。
+
+### 6‑7‑1　メトリクス・スモークテスト
+
+本番デプロイ前に重要なメトリクスが正常に収集されているかを自動テストで検証：
+
+```java
+@SpringBootTest
+@TestPropertySource(properties = {
+    "management.endpoints.web.exposure.include=health,metrics,prometheus"
+})
+class MetricsSmokeTest {
+    
+    @Autowired
+    private TestRestTemplate restTemplate;
+    
+    @Autowired
+    private MeterRegistry meterRegistry;
+    
+    @Test
+    void healthEndpointShouldBeUp() {
+        ResponseEntity<String> response = 
+            restTemplate.getForEntity("/actuator/health", String.class);
+        
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).contains("\"status\":\"UP\"");
+    }
+    
+    @Test
+    void jvmMetricsShouldBeAvailable() {
+        ResponseEntity<String> response = 
+            restTemplate.getForEntity("/actuator/metrics/jvm.memory.used", String.class);
+        
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).contains("\"name\":\"jvm.memory.used\"");
+    }
+    
+    @Test 
+    void prometheusEndpointShouldExposeMetrics() {
+        ResponseEntity<String> response = 
+            restTemplate.getForEntity("/actuator/prometheus", String.class);
+        
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+            .contains("jvm_memory_used_bytes")
+            .contains("http_server_requests_seconds");
+    }
+    
+    @Test
+    void customMetricsShouldBeRegistered() {
+        // カスタムメトリクスの存在確認
+        assertThat(meterRegistry.find("order.submit").timer()).isNotNull();
+        assertThat(meterRegistry.find("user.creation").counter()).isNotNull();
+    }
+    
+    @Test
+    void metricsCardinailityShouldBeControlled() {
+        // High-cardinality な危険なメトリクスがないことを確認
+        Collection<Meter> meters = meterRegistry.getMeters();
+        
+        meters.forEach(meter -> {
+            // ユーザーIDなどの高カーディナリティ値がタグに含まれていないことを確認
+            assertThat(meter.getId().getTags())
+                .noneMatch(tag -> 
+                    tag.getKey().equals("userId") || 
+                    tag.getKey().equals("sessionId") ||
+                    tag.getKey().equals("requestId")
+                );
+        });
+    }
+}
+```
+
+**CI パイプラインでの自動検証**：
+
+```yaml
+# .github/workflows/metrics-smoke-test.yml
+name: Metrics Smoke Test
+
+on: 
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  metrics-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+    
+    - name: Run metrics smoke tests
+      run: ./gradlew test --tests="*MetricsSmokeTest*"
+    
+    - name: Verify Prometheus endpoint
+      run: |
+        ./gradlew bootRun &
+        sleep 30
+        curl -f http://localhost:8080/actuator/prometheus | grep -q "jvm_memory_used_bytes"
+        pkill -f "gradle"
+```
 
 ---
 

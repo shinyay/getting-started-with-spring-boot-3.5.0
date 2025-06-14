@@ -59,6 +59,116 @@ class SecurityConfig {
 * `httpBasic()`／`formLogin()` だけで実装可能。
 * Boot 起動時に Common‑Logging へパスワードが出力されるので **本番環境では必ず自前ユーザーで上書き**。([docs.spring.io][3])
 
+**インメモリユーザーの詳細設定例**：
+
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    
+    @Bean
+    public UserDetailsService userDetailsService() {
+        // パスワードエンコーダーを使用して安全にパスワードを保存
+        PasswordEncoder encoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
+        
+        UserDetails admin = User.builder()
+            .username("admin")
+            .password(encoder.encode("admin123")) // 本番では強力なパスワードを使用
+            .roles("ADMIN", "USER")
+            .authorities("READ_USERS", "WRITE_USERS", "DELETE_USERS")
+            .accountNonExpired(true)
+            .accountNonLocked(true)
+            .credentialsNonExpired(true)
+            .disabled(false)
+            .build();
+            
+        UserDetails user = User.builder()
+            .username("user")
+            .password(encoder.encode("user123"))
+            .roles("USER")
+            .authorities("READ_USERS")
+            .build();
+            
+        UserDetails readonly = User.builder()
+            .username("readonly")
+            .password(encoder.encode("readonly123"))
+            .roles("VIEWER")
+            .authorities("READ_USERS")
+            .build();
+        
+        return new InMemoryUserDetailsManager(admin, user, readonly);
+    }
+    
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        // Spring Security 6.4/6.5 推奨: DelegatingPasswordEncoder
+        return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+    }
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        return http
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/users/**").hasAnyRole("USER", "ADMIN")
+                .requestMatchers("/api/public/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/**").hasAuthority("READ_USERS")
+                .requestMatchers(HttpMethod.POST, "/api/**").hasAuthority("WRITE_USERS")
+                .requestMatchers(HttpMethod.DELETE, "/api/**").hasAuthority("DELETE_USERS")
+                .anyRequest().authenticated()
+            )
+            .httpBasic(basic -> basic
+                .realmName("Demo API")
+                .authenticationEntryPoint(customAuthenticationEntryPoint())
+            )
+            .formLogin(form -> form
+                .loginPage("/login")
+                .defaultSuccessUrl("/dashboard", true)
+                .failureUrl("/login?error=true")
+                .permitAll()
+            )
+            .logout(logout -> logout
+                .logoutUrl("/logout")
+                .logoutSuccessUrl("/login?logout=true")
+                .invalidateHttpSession(true)
+                .deleteCookies("JSESSIONID")
+            )
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                .maximumSessions(1)
+                .maxSessionsPreventsLogin(false)
+            )
+            .build();
+    }
+    
+    @Bean
+    public AuthenticationEntryPoint customAuthenticationEntryPoint() {
+        return (request, response, authException) -> {
+            response.setStatus(HttpStatus.UNAUTHORIZED.value());
+            response.setContentType("application/json");
+            response.getWriter().write("""
+                {
+                    "error": "Unauthorized",
+                    "message": "Authentication required",
+                    "timestamp": "%s"
+                }
+                """.formatted(Instant.now()));
+        };
+    }
+}
+```
+
+**Spring Security バージョン別の重要な違い**：
+
+| バージョン | 主な変更点 | 移行時の注意点 |
+|-----------|-----------|-------------|
+| **Spring Security 6.4** | `@EnableMethodSecurity` デフォルト有効化 | `@EnableGlobalMethodSecurity` は非推奨 |
+| **Spring Security 6.5** | Passkeys (WebAuthn) 正式サポート | `webAuthn()` DSL 追加 |
+| | AuthorizationManager API 強化 | `access()` メソッドでより柔軟な認可制御 |
+| | SSL Bundle 統合 | mTLS 設定の簡素化 |
+
+> **注意**: Spring Security 6.4 と 6.5 では `SecurityFilterChain` の DSL が一部変更されています。Spring Boot 3.5 では 6.5 系が標準ですが、6.4 からの移行時は DSL の変更点を確認してください。
+
 ### 8‑3‑2　Passkeys（WebAuthn） ― 6.5 の目玉機能
 
 ```java
@@ -77,6 +187,8 @@ SecurityFilterChain passkey(HttpSecurity http,
 
 * **パスワードレスかつフィッシング耐性** の高い認証方式。
 * 6.5 で **JDBC 永続化**・`HttpMessageConverter` カスタマイズが拡充。([docs.spring.io][4], [docs.spring.io][5])
+
+> **実装サンプル**: WebAuthn の完全な実装例は[こちらのサンプルアプリケーション](https://github.com/spring-projects/spring-security-samples/tree/main/servlet/spring-boot/java/authentication/webauthn)を参照してください。登録・認証フローの詳細な実装と設定例が含まれています。
 
 ### 8‑3‑3　OAuth 2.0 / OIDC クライアント
 

@@ -102,6 +102,25 @@ Boot 3.5 の `@WebMvcTest` はデフォルトで **Spring Security と MockMvc
 ## 9‑3　統合テストと Testcontainers 2.x
 
 ### 9‑3‑1 `@ServiceConnection` で “ゼロ設定” コンテナ
+**Testcontainers クイックセットアップ要件**：
+
+1. **Docker 環境**：Docker Desktop (Windows/Mac) または Docker Engine (Linux) が動作していること
+2. **Java 17+**：Testcontainers 2.x は Java 17 以上が必要
+3. **依存追加**：
+
+```xml
+<!-- Maven -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-testcontainers</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>test</scope>
+</dependency>
+```
 
 ```java
 @Testcontainers
@@ -140,6 +159,28 @@ void produce_and_consume() {...}
 
 * 旧式の `@DynamicPropertySource` は引き続き利用可能ですが、ServiceConnection 使用時は不要。
 * **JUnit 5 Parallel Execution** (`junit.jupiter.execution.parallel.enabled=true`) と組み合わせる場合は **Reusable Containers** パターン（`startOnce()`）で大幅な時間短縮が可能 ([medium.com][7])。
+**パラレル実行キャッシュ設定（`TESTCONTAINERS_REUSE_ENABLE`）**：
+
+```properties
+# テストランナー設定（junit-platform.properties）
+junit.jupiter.execution.parallel.enabled=true
+junit.jupiter.execution.parallel.mode.default=concurrent
+junit.jupiter.execution.parallel.config.strategy=dynamic
+```
+
+```bash
+# 環境変数でコンテナ再利用を有効化
+export TESTCONTAINERS_REUSE_ENABLE=true
+```
+
+```java
+@Container
+@ServiceConnection
+static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+    .withReuse(true);  // コンテナ再利用を明示的に有効化
+```
+
+> **パフォーマンス効果**: コンテナ再利用により、統合テストの実行時間を **50-70%** 短縮できます。
 
 ---
 
@@ -165,6 +206,141 @@ void orderGaugeUpdated() {
 
 `@SpringBootTest` + `ZipkinContainer` を起動し、`/dependencies` API を Polling→Assert することで **Span 間の親子関係** を自動検証できる。
 
+**Micrometer Tracing Test での SpanRecorder 活用**：
+
+```java
+@SpringBootTest
+class TracingIntegrationTest {
+    
+    @Autowired
+    private OrderService orderService;
+    
+    @Autowired
+    private Tracer tracer;
+    
+    private TestSpanCollector spanCollector;
+    
+    @BeforeEach
+    void setUp() {
+        spanCollector = new TestSpanCollector();
+        // テスト用のスパンコレクターを設定
+    }
+    
+    @Test
+    void orderProcessingShouldCreateExpectedSpans() {
+        // テスト実行
+        orderService.processOrder(new OrderRequest("12345", List.of("item1", "item2")));
+        
+        // スパンの検証
+        List<FinishedSpan> spans = spanCollector.getFinishedSpans();
+        
+        assertThat(spans).hasSize(3);
+        
+        // 親スパンの検証
+        FinishedSpan orderSpan = spans.stream()
+            .filter(span -> span.getName().equals("order.processing"))
+            .findFirst()
+            .orElseThrow();
+            
+        assertThat(orderSpan.getTags())
+            .containsEntry("order.id", "12345")
+            .containsEntry("item.count", "2");
+            
+        // 子スパンの検証
+        FinishedSpan validationSpan = spans.stream()
+            .filter(span -> span.getName().equals("order.validation"))
+            .findFirst()
+            .orElseThrow();
+            
+        assertThat(validationSpan.getParentId())
+            .isEqualTo(orderSpan.getSpanId());
+    }
+    
+    @Test
+    void errorsShouldBeRecordedInSpans() {
+        // エラーケースのテスト
+        assertThatThrownBy(() -> 
+            orderService.processOrder(new OrderRequest("invalid", List.of()))
+        ).isInstanceOf(ValidationException.class);
+        
+        List<FinishedSpan> spans = spanCollector.getFinishedSpans();
+        
+        FinishedSpan errorSpan = spans.stream()
+            .filter(span -> span.getTags().containsKey("error"))
+            .findFirst()
+            .orElseThrow();
+            
+        assertThat(errorSpan.getTags())
+            .containsEntry("error", "true")
+            .containsEntry("error.type", "validation_error");
+    }
+}
+
+// テスト用のスパンコレクター実装
+class TestSpanCollector implements SpanHandler {
+    private final List<FinishedSpan> finishedSpans = new ArrayList<>();
+    
+    @Override
+    public boolean end(TraceContext traceContext, MutableSpan span, Cause cause) {
+        finishedSpans.add(span.toFinishedSpan());
+        return true;
+    }
+    
+    public List<FinishedSpan> getFinishedSpans() {
+        return new ArrayList<>(finishedSpans);
+    }
+    
+    public void clear() {
+        finishedSpans.clear();
+    }
+}
+```
+
+**Testcontainers との統合テスト**：
+
+```java
+@Testcontainers
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+class E2ETracingTest {
+    
+    @Container
+    @ServiceConnection
+    static ZipkinContainer zipkin = new ZipkinContainer()
+        .withExposedPorts(9411);
+    
+    @LocalServerPort
+    private int port;
+    
+    @Autowired
+    private TestRestTemplate restTemplate;
+    
+    @Test
+    void httpRequestsShouldGenerateCompleteTraces() throws Exception {
+        // HTTP リクエストを実行
+        ResponseEntity<String> response = restTemplate.postForEntity(
+            "http://localhost:" + port + "/api/orders",
+            new OrderRequest("test-order", List.of("item1")),
+            String.class
+        );
+        
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        
+        // Zipkin API でトレースを検証
+        await().atMost(Duration.ofSeconds(10))
+            .untilAsserted(() -> {
+                String traces = restTemplate.getForObject(
+                    zipkin.getHttpUrl() + "/api/v2/traces?serviceName=demo-service",
+                    String.class
+                );
+                
+                assertThat(traces)
+                    .contains("order.processing")
+                    .contains("http.server.requests");
+            });
+    }
+}
+```
+
 ---
 
 ## 9‑5　ベストプラクティス集
@@ -183,6 +359,7 @@ void orderGaugeUpdated() {
 ### まとめ
 
 本章では **ユニット（JUnit + Mockito）→ スライス（`@WebMvcTest` 等）→ 統合（Testcontainers + Service Connection）** と段階的に深度を増すテスト戦略を体系化しました。Boot 3.5 の Testcontainers 連携により “データベースの起動すらコード 1 行” で完結し、SSL/メトリクスを含む実運用同等の E2E テストが容易になっています。次章では、これらテスト結果を最大化する **ベストプラクティス & AOT 最適化** をさらに掘り下げます。
+> **データ永続化テスト**: JPA・R2DBC を使用したアプリケーションのテスト戦略については、**第 5 章 データ永続化** も合わせて参照してください。リポジトリテストやトランザクションテストの具体例が含まれています。
 
 [1]: https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-starter-test/3.5.0-M1?utm_source=chatgpt.com "spring-boot-starter-test » 3.5.0-M1 - Maven Repository"
 [2]: https://docs.spring.io/spring-boot/3.5/api/java/org/springframework/boot/test/autoconfigure/web/servlet/WebMvcTest.html?utm_source=chatgpt.com "WebMvcTest (Spring Boot 3.5.0 API)"

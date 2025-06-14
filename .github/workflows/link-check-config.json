@@ -1,0 +1,23 @@
+{
+  "ignorePatterns": [
+    {
+      "pattern": "^http://localhost"
+    },
+    {
+      "pattern": "^https://github.com/awesome-springboot-3.5-book"
+    }
+  ],
+  "httpHeaders": [
+    {
+      "urls": ["https://docs.spring.io", "https://spring.io"],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (compatible; Documentation Bot)"
+      }
+    }
+  ],
+  "timeout": "20s",
+  "retryOn429": true,
+  "retryCount": 2,
+  "fallbackRetryDelay": "30s",
+  "aliveStatusCodes": [200, 206, 429]
+}
