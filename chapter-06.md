@@ -1,4 +1,4 @@
-# 第 5 章　Web アプリ開発 ― Spring MVC／WebFlux／HTTP クライアント
+# 第 6 章　Web アプリ開発 ― Spring MVC／WebFlux／HTTP クライアント
 
 （Spring Boot 3.5 GA・Java 17+ 前提）
 
