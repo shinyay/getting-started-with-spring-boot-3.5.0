@@ -538,8 +538,8 @@ jobs:
       uses: actions/cache@v3
       with:
         path: ~/.m2
-        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-m2
+        key: ${{ "{{" }} runner.os }}-m2-${{ "{{" }} hashFiles('**/pom.xml') }}
+        restore-keys: ${{ "{{" }} runner.os }}-m2
         
     - name: Run tests
       run: ./mvnw clean test
@@ -567,15 +567,15 @@ jobs:
     - name: Login to DockerHub
       uses: docker/login-action@v3
       with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+        username: ${{ "{{" }} secrets.DOCKER_USERNAME }}
+        password: ${{ "{{" }} secrets.DOCKER_PASSWORD }}
         
     - name: Build and push
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
-        tags: your-username/spring-boot-app:latest,your-username/spring-boot-app:${{ github.sha }}
+        tags: your-username/spring-boot-app:latest,your-username/spring-boot-app:${{ "{{" }} github.sha }}
 ```
 
 これらのサンプルコードを参考に、実際の Spring Boot 3.5.0 アプリケーションを構築してください。各例は独立して動作するように作られており、プロジェクトの要件に応じてカスタマイズできます。

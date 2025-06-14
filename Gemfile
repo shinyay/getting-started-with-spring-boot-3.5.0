@@ -1,8 +1,7 @@
 source "https://rubygems.org"
 
-# Jekyll and GitHub Pages
+# Use the latest stable Jekyll for better compatibility
 gem "jekyll", "~> 4.3.0"
-gem "github-pages", group: :jekyll_plugins
 
 # Plugins
 group :jekyll_plugins do
@@ -11,6 +10,9 @@ group :jekyll_plugins do
   gem "jekyll-seo-tag"
   gem "jemoji"
 end
+
+# Required for Jekyll 4.x
+gem "webrick", "~> 1.7"
 
 # Windows and JRuby does not include zoneinfo files, so bundle the tzinfo-data gem
 # and associated library.
