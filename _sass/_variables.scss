@@ -1,0 +1,48 @@
+// Spring.io Color Palette
+$spring-primary: #6db33f;
+$spring-secondary: #34302d;
+$spring-accent: #5fa134;
+$spring-background: #f8f9fa;
+$spring-text: #333333;
+$spring-light-gray: #f1f3f4;
+$spring-dark-gray: #5f6368;
+
+// Typography
+$font-family-base: 'Source Sans Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+$font-size-base: 16px;
+$line-height-base: 1.6;
+
+// Spacing
+$spacer: 1rem;
+$spacer-xs: $spacer * 0.25;
+$spacer-sm: $spacer * 0.5;
+$spacer-md: $spacer;
+$spacer-lg: $spacer * 1.5;
+$spacer-xl: $spacer * 2;
+$spacer-xxl: $spacer * 3;
+
+// Breakpoints
+$screen-xs: 576px;
+$screen-sm: 768px;
+$screen-md: 992px;
+$screen-lg: 1200px;
+$screen-xl: 1400px;
+
+// Container widths
+$container-max-width: 1200px;
+$container-padding: 20px;
+
+// Border radius
+$border-radius-sm: 4px;
+$border-radius: 6px;
+$border-radius-lg: 8px;
+
+// Shadows
+$box-shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.1);
+$box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+$box-shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.15);
+
+// Transitions
+$transition-fast: 0.15s ease-in-out;
+$transition-base: 0.3s ease-in-out;
+$transition-slow: 0.5s ease-in-out;

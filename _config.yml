@@ -1,0 +1,95 @@
+# Site settings
+title: "Getting Started with Spring Boot 3.5.0"
+description: "A comprehensive guide to Spring Boot 3.5.0 with Spring.io-style design"
+baseurl: "/getting-started-with-spring-boot-3.5.0"
+url: "https://shinyay.github.io"
+
+# Author
+author:
+  name: "Shinya Yanagihara"
+  email: "shinya.yanagihara@gmail.com"
+
+# Build settings
+markdown: kramdown
+highlighter: rouge
+permalink: pretty
+
+# Plugins
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+  - jekyll-seo-tag
+  - jemoji
+
+# Exclude from processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+  - .tmp/
+
+# Collections
+collections:
+  chapters:
+    output: true
+    permalink: /:collection/:name/
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: "post"
+  - scope:
+      path: ""
+      type: "pages"
+    values:
+      layout: "page"
+  - scope:
+      path: ""
+      type: "chapters"
+    values:
+      layout: "page"
+
+# Spring.io Color Theme
+spring:
+  primary: "#6db33f"
+  secondary: "#34302d"
+  accent: "#5fa134"
+  background: "#f8f9fa"
+  text: "#333333"
+  light_gray: "#f1f3f4"
+  dark_gray: "#5f6368"
+
+# Navigation
+navigation:
+  - title: "Home"
+    url: "/"
+  - title: "Setup"
+    url: "/setup/"
+  - title: "Chapters"
+    url: "/chapters/"
+  - title: "Examples"
+    url: "/examples/"
+  - title: "API Reference"
+    url: "/api/"
+  - title: "About"
+    url: "/about/"
+
+# Social links
+github_username: shinyay
+twitter_username: yanashin18618
+
+# Code highlighting
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    css_class: 'highlight'
+    span:
+      line_numbers: false

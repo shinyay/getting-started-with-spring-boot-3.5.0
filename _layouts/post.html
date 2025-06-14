@@ -1,0 +1,25 @@
+---
+layout: default
+---
+
+<article class="post">
+    <header class="post-header">
+        <div class="container">
+            <h1 class="post-title">{{ page.title }}</h1>
+            <div class="post-meta">
+                <time datetime="{{ page.date | date_to_xmlschema }}">
+                    {{ page.date | date: "%B %d, %Y" }}
+                </time>
+                {% if page.author %}
+                <span class="post-author"> by {{ page.author }}</span>
+                {% endif %}
+            </div>
+        </div>
+    </header>
+
+    <div class="post-content">
+        <div class="container">
+            {{ content }}
+        </div>
+    </div>
+</article>

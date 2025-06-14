@@ -1,3 +1,8 @@
+---
+layout: page
+title: "第 8 章　コンテナ化とネイティブビルド"
+---
+
 # 第 8 章　コンテナ化とネイティブビルド
 
 （Spring Boot 3.5 GA ― Buildpacks v0.20 系／GraalVM 24.1 CE を前提）

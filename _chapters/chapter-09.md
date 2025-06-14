@@ -1,3 +1,8 @@
+---
+layout: page
+title: "第 9 章　セキュリティ統合 ― Spring Security 6.5 と Spring Boot 3.5"
+---
+
 # 第 9 章　セキュリティ統合 ― Spring Security 6.5 と Spring Boot 3.5
 
 （Java 17+／Jakarta EE 10 前提）

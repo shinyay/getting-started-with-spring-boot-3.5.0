@@ -1,3 +1,8 @@
+---
+layout: page
+title: "序章　― Spring Boot 3.5 が拓く “クラウド標準 Java” の現在地"
+---
+
 # 序章　― Spring Boot 3.5 が拓く “クラウド標準 Java” の現在地
 
 ---

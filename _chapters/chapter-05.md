@@ -1,3 +1,8 @@
+---
+layout: page
+title: "第 5 章　データ永続化 ― JPA・Spring Data・R2DBC"
+---
+
 # 第 5 章　データ永続化 ― JPA・Spring Data・R2DBC
 
 （Spring Boot 3.5 GA・Java 17+ 前提）

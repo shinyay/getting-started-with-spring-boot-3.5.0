@@ -1,0 +1,40 @@
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-content">
+            <div class="footer-section">
+                <h3 class="footer-title">{{ site.title }}</h3>
+                <p class="footer-description">{{ site.description }}</p>
+            </div>
+            
+            <div class="footer-section">
+                <h4 class="footer-subtitle">Links</h4>
+                <ul class="footer-links">
+                    <li><a href="{{ '/' | relative_url }}">Home</a></li>
+                    <li><a href="{{ '/about/' | relative_url }}">About</a></li>
+                    <li><a href="{{ '/chapters/' | relative_url }}">Chapters</a></li>
+                    <li><a href="https://spring.io/" target="_blank" rel="noopener">Spring.io</a></li>
+                </ul>
+            </div>
+            
+            <div class="footer-section">
+                <h4 class="footer-subtitle">Connect</h4>
+                <div class="social-links">
+                    {% if site.github_username %}
+                    <a href="https://github.com/{{ site.github_username }}" target="_blank" rel="noopener" class="social-link">
+                        <i class="fab fa-github"></i>
+                    </a>
+                    {% endif %}
+                    {% if site.twitter_username %}
+                    <a href="https://twitter.com/{{ site.twitter_username }}" target="_blank" rel="noopener" class="social-link">
+                        <i class="fab fa-twitter"></i>
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer-bottom">
+            <p>&copy; {{ site.time | date: "%Y" }} {{ site.author.name }}. Built with <a href="https://jekyllrb.com/" target="_blank" rel="noopener">Jekyll</a> and <i class="fas fa-heart"></i>.</p>
+        </div>
+    </div>
+</footer>
