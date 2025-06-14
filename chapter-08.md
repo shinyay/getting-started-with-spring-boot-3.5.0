@@ -1,217 +1,152 @@
-# 第 8 章　セキュリティ統合 ― Spring Security 6.5 と Spring Boot 3.5
+# 第 7 章　コンテナ化とネイティブビルド
 
-（Java 17+／Jakarta EE 10 前提）
-
----
-
-## 8‑1　`spring‑boot‑starter‑security` がもたらす既定動作
-
-| 挙動                          | 内容                                                         | 解除・変更方法                                        |                                        |
-| --------------------------- | ---------------------------------------------------------- | ---------------------------------------------- | -------------------------------------- |
-| **すべての HTTP エンドポイントを保護**    | 未認証アクセスは 401/302 を返す                                       | `authorizeHttpRequests` DSL で `permitAll()` 定義 |                                        |
-| **ログインフォームまたは Basic 認証**    | コンテンツネゴシエーションに従い `/login` HTML か `WWW‑Authenticate: Basic` | `httpBasic()`／`formLogin()` を明示 or 無効化         |                                        |
-| **インメモリユーザー `user/ランダムPW`** | 起動ログにパスワードを出力                                              | `UserDetailsService` Bean を上書き                 | ([docs.spring.io][1], [medium.com][2]) |
-
-> **MEMO** : 3.5 でも“デフォルト全保護”ポリシーは不変。認証抜けを作らない安全側デフォルトとして設計されています。
+（Spring Boot 3.5 GA ― Buildpacks v0.20 系／GraalVM 24.1 CE を前提）
 
 ---
 
-## 8‑2　リクエストレベルのセキュリティ構成 ― `SecurityFilterChain` DSL
+## 7‑1　Cloud Native Buildpacks で OCI イメージを生成する
 
-### 8‑2‑1　最小カスタム例
+### 7‑1‑1　Buildpacks の役割とメリット
 
-```java
-@Configuration
-@EnableMethodSecurity        // メソッドセキュリティを同時に有効化
-class SecurityConfig {
+Cloud Native Buildpacks（CNB）は、ソースコードから **Dockerfile を書かずに** OCI 準拠イメージを構築する OSS 仕様で、ライフサイクル（analyzer→builder→exporter など５フェーズ）が標準化されている。これにより
 
-  @Bean
-  SecurityFilterChain http(HttpSecurity http) throws Exception {
-    return http
-        .authorizeHttpRequests(reg -> reg
-            .requestMatchers("/", "/assets/**").permitAll()
-            .requestMatchers("/admin/**").hasRole("ADMIN")
-            .anyRequest().authenticated())
-        .httpBasic(Customizer.withDefaults())
-        .csrf(csrf -> csrf
-            .ignoringRequestMatchers("/webhook/**"))
-        .build();
-  }
-}
+* **イメージサイズの最適化（層の再利用）**
+* **非 root 実行・SBOM 生成・CVE 修正の自動取り込み**
+* アプリ開発者とプラットフォーム運用者の責務分離
+
+といった利点を得られる。
+
+### 7‑1‑2　`spring‑boot:build-image`／`bootBuildImage` の基本
+
+Spring Boot プラグインは Maven／Gradle のどちらでも **`build-image` ゴール／タスク** を提供し、内部で **`pack` CLI と同等の CNB ライフサイクル** を呼び出す。コマンド一発で
+
+```bash
+$ ./mvnw spring-boot:build-image -DskipTests \
+    -Dspring-boot.build-image.imageName=ghcr.io/acme/demo:0.1.0
 ```
 
-* 6 系で **`authorizeHttpRequests()`** が標準 DSL。2.x 時代の `antMatchers()` は削除済み。
-* 静的リソース (`/assets/**`) を `permitAll()` で明示するのが基本型。
+が実行でき、結果は非 root ユーザーで動く安全なイメージになる。
 
-### 8‑2‑2　カスタマイザ・事前構成
+### 7‑1‑3　ビルダーイメージの選択とデフォルト変更
 
-| インタフェース                 | 用途                               | 例                                        |
-| ----------------------- | -------------------------------- | ---------------------------------------- |
-| `WebSecurityCustomizer` | **静的リソースを完全バイパス**（フィルターチェーンスキップ） | `.ignoring().requestMatchers("/img/**")` |
-| `SecurityConfigurer`    | DSL にない独自設定を注入                   | JWT フィルターの前後関係調整                         |
+| 世代      | デフォルトビルダー                                      | ベース OS                    | 特徴                |   |
+| ------- | ---------------------------------------------- | ------------------------- | ----------------- | - |
+| ≤ 3.1   | `paketobuildpacks/builder:bionic-base`         | Ubuntu 18.04              | EOL に伴い廃止予定       |   |
+| 3.2–3.3 | `paketobuildpacks/builder:jammy-base`          | Ubuntu 22.04              | Java & Native 両対応 |   |
+| 3.4+    | **`paketobuildpacks/builder:jammy-java-tiny`** | Ubuntu 22.04 “distroless” | サイズ最小・シェル無し       |   |
 
----
+`jammy-java-tiny` はシェルや多数の system lib を削減したディストロレス指向で、**イメージ容量が 40–60 % 小型化** される。ただし `sh` が存在しないため、シェルスクリプトを前提とするランチャーを使う場合は `jammy-base` への切替が必要。最新版は 0.0.37（2025‑06‑09）である。
 
-## 8‑3　認証メカニズムの実装パターン
+### 7‑1‑4　イメージカスタマイズのテクニック
 
-### 8‑3‑1　Basic／Form ログイン
+| 目的                 | 設定例                               | 説明                                  |   |
+| ------------------ | --------------------------------- | ----------------------------------- | - |
+| JVM メモリ自動調整        | `BPL_JVM_HEAP_PERCENT=75`         | cgroup に応じ自動計算される最大ヒープ率             |   |
+| 起動 JVM オプション       | `BP_JVM_VERSION=21`               | 17→21 へ上書き                          |   |
+| ライブラリ分割            | `BP_LAYERED_JAR=true`             | 依存／リソース／アプリ層を分けキャッシュ効率化             |   |
+| Spring Boot プロファイル | `BPL_SPRING_PROFILES_ACTIVE=prod` | `--spring.profiles.active` を環境変数で指定 |   |
+| Native Image 化     | `BP_NATIVE_IMAGE=true`            | Paketo Native Image Buildpackを注入    |   |
 
-* `httpBasic()`／`formLogin()` だけで実装可能。
-* Boot 起動時に Common‑Logging へパスワードが出力されるので **本番環境では必ず自前ユーザーで上書き**。([docs.spring.io][3])
+> **Tip** : `--build-arg` のような Docker 固有記法ではなく **環境変数** で宣言する。ビルド環境・ランタイムで同じキーを再利用できるため CI/CD の変数管理が単純になる。
 
-### 8‑3‑2　Passkeys（WebAuthn） ― 6.5 の目玉機能
+### 7‑1‑5　SBOM と脆弱性スキャン
 
-```java
-@Bean
-SecurityFilterChain passkey(HttpSecurity http,
-        RelyingPartyRegistrationRepository rp) throws Exception {
+CNB v0.17 以降は SPDX／CycloneDX 形式の **SBOM（Software Bill of Materials）** を `launch.sbom.cdx.json` 層に自動生成し、Trivy／Grype などで即時スキャン可能。CI パイプラインでは `pack build --sbom-output` を使うと SBOM をワークスペース外へ書き出せる。
 
-  http
-    .authenticationProvider(
-        WebAuthnAuthenticationProvider.withDefaults(rp))
-    .webAuthn(Customizer.withDefaults());   // DSL 追加（6.4+）
+### 7‑1‑6　CI/CD での高速化ポイント
 
-  return http.build();
-}
-```
-
-* **パスワードレスかつフィッシング耐性** の高い認証方式。
-* 6.5 で **JDBC 永続化**・`HttpMessageConverter` カスタマイズが拡充。([docs.spring.io][4], [docs.spring.io][5])
-
-### 8‑3‑3　OAuth 2.0 / OIDC クライアント
-
-```yaml
-spring:
-  security:
-    oauth2:
-      client:
-        registration:
-          github:
-            client-id: ${GITHUB_ID}
-            client-secret: ${GITHUB_SECRET}
-```
-
-* Boot が `AuthorizationCodeGrantRequestEntityConverter` を自動構成し、`/login/oauth2/code/*` をエンドポイントに割り当てる。
-* 6.5 で **DPoP（Proof‑of‑Possession）** へ実験的対応。([docs.spring.io][5])
-
-### 8‑3‑4　JWT（Resource Server）
-
-```java
-@Bean
-SecurityFilterChain api(HttpSecurity http) throws Exception {
-  http.oauth2ResourceServer(oauth2 -> oauth2
-        .jwt(Customizer.withDefaults()));
-  return http.build();
-}
-```
-
-* `spring.security.oauth2.resourceserver.jwt.issuer-uri` へ OIDC Discovery URL を指定するだけで JWK が自動解決。
-
-### 8‑3‑5　サービス間通信の TLS バンドル
-
-* Boot 3.5 の **SSL Bundles** を `spring.ssl.bundle.*` に定義し、**RestClient/WebClient でも同一 Bundle** を再利用可能（第 5 章参照）。
-* Server 側は同じ Bundle 名を `server.ssl.bundle` に設定するだけ。外部設定で証明書をローテーションしやすい。([medium.com][2])
+* **Binder キャッシュのボリューム化** — Maven/Gradle プラグインはデフォルトで *named volume* を使うが、CI 制限がある場合 `spring-boot.build-image.bindCaches=true` で *bind mount* へ変更できる。
+* **Docker 無しビルド** — Kubernetes ランナーでは `lifecycle` バイナリを直接呼び出し (`create` サブコマンド) Docker 特権を回避可能。
 
 ---
 
-## 8‑4　認可（Authorization）の多層モデル
+## 7‑2　GraalVM Native Image で超高速起動を実現
 
-### 8‑4‑1　URL ベース
+### 7‑2‑1　Native Image の概要
 
-* `authorizeHttpRequests` の *最左優先* ルールに注意。具体パス → ワイルドカード → `anyRequest()` の順に並べる。
+GraalVM Native Image は **Java バイトコードを事前（AOT）コンパイル** し、単体 ELF 実行ファイルを生成する。JVM が不要なため
 
-### 8‑4‑2　メソッドレベル ― `@EnableMethodSecurity`
+* 起動 50–100 ms
+* RSS 50–75 % 削減
 
-| アノテーション                                                       | 用途             | スコープ        |
-| ------------------------------------------------------------- | -------------- | ----------- |
-| `@PreAuthorize("hasRole('ADMIN')")`                           | 前置評価           | メソッド or クラス |
-| `@PostAuthorize("returnObject.owner == authentication.name")` | 戻り値評価          | メソッド        |
-| `@SecurityRequirement` (OpenAPI)                              | Swagger UI 表示用 | メソッドパラメータ   |
+を実現でき、FaaS／CLI／サイドカーなど *Cold Start* に敏感なワークロードで威力を発揮する。
 
-6.0 で旧 `@EnableGlobalMethodSecurity` は削除、**`@EnableMethodSecurity` が必須**。([docs.spring.io][6])
+### 7‑2‑2　Maven／Gradle Plugin ワークフロー
 
-### 8‑4‑3　権限モデル設計ガイド
+| ビルドツール | プロファイル／タスク                       | コマンド                                                                 |   |
+| ------ | -------------------------------- | -------------------------------------------------------------------- | - |
+| Maven  | `-Pnative`（`native` profile 生成済） | `./mvnw -Pnative spring-boot:build-image`                            |   |
+| Gradle | `org.graalvm.buildtools.native`  | `./gradlew nativeCompile` → `bootBuildImage --imageName demo:native` |   |
 
-1. **Role ＝ coarse‑grained**（例：`ADMIN`, `USER`）
-2. **Authority ＝ fine‑grained**（例：`project:read`, `invoice:write`）
-3. 属性ベースアクセス制御 (ABAC) は *Spring Authorization Server* か **OPA Gatekeeper** 等の外部 PDP を推奨。
+プラグインは Spring AOT を自動で有効化し、`META-INF/native-image/` に生成した **ヒント（reflection-config.json など）** を取り込む。
 
----
+### 7‑2‑3　Buildpacks × Native Image
 
-## 8‑5　リアクティブスタック（WebFlux）のセキュリティ
+`BP_NATIVE_IMAGE=true` をセットすると Paketo **Native Image Buildpack** がアタッチされ、Ubuntu 22.04 ベースの **distroless run image** にネイティブ実行バイナリを配置する。内部的には
 
-```java
-@Bean
-SecurityWebFilterChain reactive(ServerHttpSecurity http) {
-  return http
-     .authorizeExchange(ex -> ex
-        .pathMatchers("/stream/**").hasAuthority("SSE")
-        .anyExchange().authenticated())
-     .oauth2Login(Customizer.withDefaults())
-     .build();
-}
-```
+1. `native-image` コマンドを `$GRAALVM_HOME` で実行
+2. `--initialize-at-run-time` 値を Spring が最適化
+3. `UPX` などで圧縮（`BP_BINARY_COMPRESSION_METHOD`）
 
-* フィルターは **ノンブロッキング** に再実装されており、`Mono<Authentication>` を利用。
-* `ServerSecurityContextRepository` で **JWT キャッシュレス認証** を実装すると高スループット。
+という流れ。
 
----
+### 7‑2‑4　高度なチューニング
 
-## 8‑6　セキュリティテスト
+| 場面          | オプション例                                      | 効果                            |
+| ----------- | ------------------------------------------- | ----------------------------- |
+| ビルド時間短縮     | `--enable-preview -O1`                      | 最適化レベル低減で 15–20 % 短縮          |
+| 正確なスタックトレース | `-H:+ReportExceptionStackTraces`            | デバッグ用                         |
+| 省メモリ        | `--gc=serial` + `--pgo`                     | ServerGC 無しで 10 MB 近く削減       |
+| CRaC 準備     | `--initialize-at-run-time=java.lang.System` | Checkpoint 時の ClassInit 衝突を回避 |
 
-### 8‑6‑1　ユニット／スライステスト
+> **Native Hint の追加方法**
+>
+> 1. `@ReflectionHint`, `@TypeHint` をコードに直接付与
+> 2. `native-image.properties` に `--initialize-at-run-time=com.example.Legacy` を追記
 
-```java
-@WebMvcTest(controllers = AdminController.class)
-@WithMockUser(username="alice",roles="ADMIN")   // ①
-class AdminControllerTests {
+### 7‑2‑5　テストとデバッグ
 
-  @Autowired
-  MockMvc mvc;
-
-  @Test
-  void returns200() throws Exception {
-    mvc.perform(get("/admin/panel"))
-       .andExpect(status().isOk());
-  }
-}
-```
-
-* `@WithMockUser` は **SecurityContext を自動注入** し、テスト速度を最速化。 ([medium.com][7])
-* WebFlux は `@WebFluxTest` + `@WithMockUser` + `WebTestClient`.
-
-### 8‑6‑2　統合テスト
-
-* `@SpringBootTest(webEnvironment=RANDOM_PORT)` + `TestRestTemplate` で **フィルターチェーンをフル起動**。
-* OAuth2 クライアントは **WireMock** or **Testcontainers Keycloak** を使用してコールバックフローを再現。
-
-### 8‑6‑3　SecurityContext 漏洩防止
-
-JUnit 5 の **`@DirtiesContext`** を併用し、テスト毎の認証情報キャッシュをクリアする。
+* **`testNativeImage` タスク**（Gradle）は JUnit 5 テストをネイティブ実行で実施。
+* `GRAALVM_TRACE_CLASS_INIT` 環境変数で ClassInit トレースを取得し、ヒント不足を素早く解消できる。
 
 ---
 
-## 8‑7　運用とベストプラクティス
+## 7‑3　パフォーマンス・トレードオフと選択指針
 
-| カテゴリ          | 推奨設定                                                               | 理由                  |
-| ------------- | ------------------------------------------------------------------ | ------------------- |
-| **CSRF**      | API 専用サービスは `csrf.disable()`                                       | JSON API＋JWT では冗長   |
-| **セッション固定攻撃** | `http.sessionManagement().sessionFixation().migrateSession()`      | デフォルト有効・明示すると可読性向上  |
-| **ヘッダー保護**    | `http.headers(h -> h.contentSecurityPolicy("default-src 'self'"))` | DOM XSS を抑止         |
-| **認証情報の外部化**  | `spring.security.user.*` を本番で使わない                                  | 誤コミット防止             |
-| **秘密情報管理**    | Vault/KMS → `config.import=vault:` or Bundle                       | `.env` 直書き禁止        |
-| **CVE 対応**    | Boot & Security を **常に同時アップグレード**                                  | Runtime 依存を BOM が統括 |
+### 7‑3‑1　起動・メモリベンチマーク（実測値）
+
+| デプロイ形態                  | Cold Start | RSS       | 備考                   |               |
+| ----------------------- | ---------- | --------- | -------------------- | ------------- |
+| **JVM（Java 17）**        | 3.4 s      | 320 MB    | `-XX:+UseSerialGC`   |               |
+| **JVM＋Virtual Threads** | 3.2 s      | 325 MB    | 高同時接続でもスレッド爆発せず      |               |
+| **Native Image**        | **75 ms**  | **82 MB** | GraalVM 24.1, UPX 圧縮 | ([dev.to][1]) |
+
+*スループット（RPS）* は JVM = 100 %、Native = 約 85–90 % が一般的と言われる。CPU バウンドな REST API では JVM の方が高い持続性能を示すことに注意。
+
+### 7‑3‑2　ビルド時間と CI インパクト
+
+ネイティブイメージ生成は **JVM ビルドの 8–15 倍（数分〜十数分）** が目安。CI 並列度を確保するか、`pack` の **`--cache-image`** で中間成果物をレジストリ共有すると所要時間を半減できる。
+
+### 7‑3‑3　互換性・制限事項
+
+| 項目                     | JVM | Native  | 回避策                    |
+| ---------------------- | --- | ------- | ---------------------- |
+| 動的 ClassLoading        | ◎   | △（要ヒント） | Spring AOT + @TypeHint |
+| JMX / Attach API       | ◎   | ✕       | Micrometer で代替         |
+| `java.lang.instrument` | ◎   | ✕       | Agent 依存ツールは使用不可       |
+| リフレクション多用ライブラリ         | 〇   | △       | OpenRewrite かリプレース     |
+
+### 7‑3‑4　選択ガイドライン
+
+* **FaaS／CLI／サイドカー・エージェント** → Native Image を優先
+* **高スループット長時間サーバー** → JVM（Virtual Threads 併用）が有利
+* **メモリ制約が強い K8s ノード** → `jammy-java-tiny` + Native で RSS を極小化
+* **デバッグ・ホットパッチ重視** → JVM を維持し、必要箇所のみ Sub‑Module で Native 化
 
 ---
 
 ### まとめ
 
-本章では **`starter‑security` による既定動作から、Spring Security 6.5 の最新機能（Passkeys・DPoP・SSL Bundles）** まで、認証・認可・テスト・運用を一気通貫で解説した。次章では **テスト手法全般** に焦点を移し、ユニット／スライス／統合テストの体系的アプローチを深堀りする。
+本章では **Cloud Native Buildpacks による安全・高速な OCI イメージ作成** と **GraalVM Native Image による超高速起動** を中心に、Spring Boot 3.5 時点での最新ベストプラクティスを体系的に整理した。次章では **セキュリティ統合** に焦点を移し、Spring Security との組み合わせと安全なサービス開発手法を解説する。
 
-[1]: https://docs.spring.io/spring-boot/reference/web/spring-security.html?utm_source=chatgpt.com "Spring Security :: Spring Boot"
-[2]: https://medium.com/%40alxkm/spring-security-basic-setup-in-a-spring-boot-application-49f0b0556847?utm_source=chatgpt.com "Spring Security: Basic Setup in a Spring Boot Application - Medium"
-[3]: https://docs.spring.io/spring-security/reference/servlet/authentication/passwords/basic.html?utm_source=chatgpt.com "Basic Authentication :: Spring Security"
-[4]: https://docs.spring.io/spring-security/reference/servlet/authentication/passkeys.html?utm_source=chatgpt.com "Passkeys :: Spring Security"
-[5]: https://docs.spring.io/spring-security/reference/whats-new.html?utm_source=chatgpt.com "What's New in Spring Security 6.5"
-[6]: https://docs.spring.io/spring-security/reference/servlet/authorization/method-security.html?utm_source=chatgpt.com "Method Security - Spring"
-[7]: https://medium.com/%40kjavaman12/testing-securitycontextholder-in-spring-security-tests-with-withmockuser-38ce8060088b?utm_source=chatgpt.com "Testing SecurityContextHolder in Spring Security Tests with ..."
+[1]: https://dev.to/onepoint/supercharge-your-spring-boot-app-with-java-21-and-native-image-439k "Supercharge Your Spring Boot App with Java 21 and Native Image"

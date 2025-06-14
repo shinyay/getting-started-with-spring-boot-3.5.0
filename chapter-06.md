@@ -1,226 +1,204 @@
-# 第 6 章　運用・モニタリング
+# 第 5 章　Web アプリ開発 ― Spring MVC／WebFlux／HTTP クライアント
 
-（Spring Boot 3.5 GA・Micrometer 1.14 系を前提）
-
----
-
-## 6‑1　Actuator 基本 ― “Production‑ready” 機能群
-
-### 6‑1‑1　Actuator を有効にする
-
-* 依存に **`spring-boot-starter-actuator`** を追加すると 30 以上の組み込みエンドポイントが登録される。
-* デフォルトで HTTP へ公開されるのは `health` のみ。その他は **`management.endpoints.web.exposure.include=*`** などで明示的に公開する ([docs.spring.io][1])。
-
-```yaml
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
-```
-
-### 6‑1‑2　エンドポイント一覧（抜粋）
-
-| ID           | 目的                   | 備考                                   |                       |
-| ------------ | -------------------- | ------------------------------------ | --------------------- |
-| `health`     | アプリ健全性               | Liveness/Readiness/Startup のグルーピング可  |                       |
-| `metrics`    | Micrometer 収集メトリクス確認 | `/metrics/jvm.memory.used` 等         |                       |
-| `prometheus` | Prometheus 形式 scrape | `micrometer-registry-prometheus` 依存要 |                       |
-| `env`        | 外部設定の一覧              | 機密値はマスクされる                           |                       |
-| `loggers`    | ログレベル変更              | POST で動的変更可                          |                       |
-| `startup`    | 起動ステップのタイムライン        | `ApplicationStartup` を有効化時           |                       |
-| `heapdump`   | ヒープダンプ生成             | セキュリティ上、本番では未公開推奨                    |                       |
-| `shutdown`   | Graceful shutdown    | デフォルト無効                              | ([docs.spring.io][1]) |
-
-### 6‑1‑3　セキュリティとアクセス制御
-
-* Boot 3.4 から **アクセス制御モデル** が一新。`management.endpoints.access.default` に `none` を指定し、個別に `read-only`／`unrestricted` を付与する「許可リスト方式」が推奨される。
-
-```yaml
-management:
-  endpoints:
-    access:
-      default: none
-  endpoint:
-    health.access: unrestricted
-    prometheus.access: read-only
-```
-
-([docs.spring.io][1])
-
-### 6‑1‑4　Health インジケータとグループ
-
-* すべての `HealthIndicator` を **グループ化** し、パスや HTTP ステータスを用途別に分離できる（例：`/actuator/health/live` と `/healthz`）。
-* HTTP マッピングは下記のようにカスタマイズ可能。
-
-```yaml
-management.endpoint.health:
-  status:
-    http-mapping:
-      down: 503
-      fatal: 503
-  group.startup.additional-path: "server:/healthz"
-```
-
-([docs.spring.io][1])
+（Spring Boot 3.5 GA・Java 17+ 前提）
 
 ---
 
-## 6‑2　Observability アーキテクチャ
+## 5‑1　Spring MVC ― テンプレート & 従来型サーブレットスタック
 
-| レイヤー        | 実装                               | 説明                                                                  |
-| ----------- | -------------------------------- | ------------------------------------------------------------------- |
-| **Logging** | Logback + **Structured Logging** | 3.5 で JSON/ECS 出力を標準サポート ([spring.io][2], [github.com][3])          |
-| **Metrics** | Micrometer 1.14                  | JVM/HTTP/DB など 250+ 系列を収集、Prometheus/OTel へエクスポート ([github.com][4]) |
-| **Tracing** | Micrometer Tracing 1.4           | W3C Trace‑Context が既定、`Baggage` で属性伝搬 ([spring.io][5])              |
+### 5‑1‑1　最小構成と自動設定
 
-### 6‑2‑1　構造化ログ設定
-
-```yaml
-logging:
-  structured:
-    json:
-      field-names:
-        level: severity
-      stacktrace:
-        max-length: 20
-```
-
-*ECS (Elastic Common Schema) フォーマット* も `logging.structured.json.format=ecs` で一発切替。([github.com][3])
-
-### 6‑2‑2　Prometheus 連携
-
-1. 依存追加：`implementation 'io.micrometer:micrometer-registry-prometheus'`
-2. `/actuator/prometheus` を公開し、Prometheus `scrape_configs` にパスを登録。
-3. `management.metrics.distribution.percentiles-histogram.http.server.requests=true` で **レイテンシ分位数** を取得。([docs.spring.io][1])
-
-### 6‑2‑3　OpenTelemetry でのトレーシング
-
-```yaml
-management:
-  tracing:
-    sampling.probability: 0.2  # 20 %
-```
-
-`micrometer-tracing-bridge-otel` と `opentelemetry-exporter-otlp` を追加すると、**OTLP gRPC** でコレクターへ即送信される。Context Propagation は自動設定。([spring.io][5])
-
----
-
-## 6‑3　アプリケーション固有メトリクス
-
-### 6‑3‑1　`@Timed` と `@Counted`
+* `spring-boot-starter-web` を依存に追加すると、**DispatcherServlet・Jackson・Thymeleaf/Mustache の各 Bean** が自動登録される。([spring.io][1])
+* コントローラは最上位パッケージ配下に配置し、`@GetMapping` 等で URL を割り当てる。
 
 ```java
-@Timed(value = "order.submit", histogram = true, percentiles = {0.95})
-@Counted("order.submit.count")
-public void submitOrder(Order o) { ... }
-```
+@Controller
+class HomeController {
 
-* Micrometer 1.14 以降は AOP 依存が不要で、注釈を付けるだけで収集される。([stackoverflow.com][6])
-
-### 6‑3‑2　MeterRegistry API
-
-```java
-public RecordController(MeterRegistry registry) {
-  Gauge.builder("records.in.buffer", buffer, Deque::size)
-       .tag("region", "ap-northeast-1")
-       .register(registry);
+  @GetMapping("/")
+  String index(Model model) {
+    model.addAttribute("msg", "Hello, Spring MVC!");
+    return "index";        // src/main/resources/templates/index.html
+  }
 }
 ```
 
-* タグは**カードinality を意識**し、ユーザー ID 等の高変動値は避ける。
+> **ポイント** : Boot 3.x では Jakarta Servlet 6.0 依存に移行しているため import は `jakarta.servlet.*` になる。
 
-### 6‑3‑3　Long Task と分布統計
+### 5‑1‑2　テンプレートエンジン選択
 
-* `LongTaskTimer` でバッチ処理の所要時間を可視化。
-* `DistributionSummary` により **ペイロードサイズ** や **金額** のヒストグラムを取得。
+| エンジン          | 依存 (starter)                    | 特徴                                                                   |
+| ------------- | ------------------------------- | -------------------------------------------------------------------- |
+| **Thymeleaf** | `spring-boot-starter-thymeleaf` | HTML5 方言で自然テンプレートを保つ。レイアウトは \[Layout Dialect] で拡張可。([github.com][2]) |
+| **Mustache**  | `spring-boot-starter-mustache`  | ロジックレス。1 ファイル＝1 View の静的サイト生成に向く。([docs.spring.io][3])               |
 
----
+Boot が自動生成する `SpringTemplateEngine` / `Mustache.Compiler` は **キャッシュ ON** が既定。開発時は `spring.thymeleaf.cache=false` にして再読み込みを有効化する。
 
-## 6‑4　Kubernetes／クラウド運用
+### 5‑1‑3　静的リソースと WebJar
 
-### 6‑4‑1　Probe 用ヘルスグループ
+* classpath :`/static`, `/public`, `/META-INF/resources` 直下は **「/」に直結** して公開される。([baeldung.com][4], [docs.spring.io][5])
+* WebJar（例：`org.webjars.npm:bootstrap`）を利用すると  `/webjars/bootstrap/5.3.3/js/bootstrap.bundle.js` のように配信可能。CDN を嫌う企業内ネットワークで便利。
 
-```yaml
-management.endpoint.health.group:
-  live:
-    include: "ping"
-  ready:
-    include: "db,messaging"
-  startup:
-    include: "startup"
+### 5‑1‑4　フォーム処理とバリデーション
+
+1. DTO に `@NotNull`, `@Size` 等の Jakarta Bean Validation アノテーションを付与。
+2. コントローラ引数に `@Valid` と `BindingResult` を置く。
+3. エラーは `th:errors="*{field}"` で表示。
+
+```java
+@PostMapping("/signup")
+String signup(@Valid @ModelAttribute UserForm form, BindingResult rs) {
+  if (rs.hasErrors()) return "signup";
+  service.create(form);
+  return "redirect:/";
+}
 ```
 
-* `live` を `/actuator/health/live` に、`ready` を管理ポートへ公開すると *Liveness ↔ Readiness* を明確に分離できる。([docs.spring.io][1])
+### 5‑1‑5　HttpMessageConverters とコンテンツネゴシエーション
 
-### 6‑4‑2　Service Connection とメトリクス
+* Boot は **23 種** の `HttpMessageConverter` を自動登録し、`Accept` ヘッダと拡張子で **JSON ↔ XML ↔ YAML** を切替える。
+* カスタム MIME を追加したい場合は `WebMvcConfigurer#extendMessageConverters` を実装するだけでよい。
 
-Boot 3.5 の **Service Connection** は **SSL/TLS の自動バンドル** と **Actuator メトリクス登録** を行い、Testcontainers・Buildpacks でも同一設定が利用可能 ([spring.io][2])。
+### 5‑1‑6　Virtual Threads 併用時の MVC
 
-### 6‑4‑3　Helm / Kustomize テンプレート例（抜粋）
+* `spring.threads.virtual.enabled=true`（Java 21 以上）で **リクエスト処理スレッドが仮想スレッド化** される。([docs.spring.io][6], [github.com][7])
+* I/O 待ちが長いがリアクティブに書き換えるほどではない API では **同一コードでスループットを向上** できる。
+* `@Async` や `@Scheduled` も自動で仮想スレッド実行になるため、スレッドプールサイズ調整の負荷が減る。
 
-```yaml
-livenessProbe:
-  httpGet:
-    path: /actuator/health/live
-    port: 8080
-readinessProbe:
-  httpGet:
-    path: /actuator/health/ready
-    port: 8080
+---
+
+## 5‑2　Spring WebFlux ― リアクティブ & ノンブロッキング
+
+### 5‑2‑1　WebFlux を選択する判断軸
+
+| 要件                      | MVC (Servlet) | WebFlux (Reactive) |
+| ----------------------- | ------------- | ------------------ |
+| 高同時接続 / SSE / WebSocket | △（従来スレッドモデル）  | ◎（ノンブロッキング I/O）    |
+| レガシー同期ライブラリ利用           | ◎             | △（ブロッキング注意）        |
+| 既存コード資産                 | ◎             | ▲（Mono/Flux へ書換え）  |
+
+Virtual Threads で MVC の同時実行性が向上したとはいえ、**バックプレッシャー制御・ストリーミング応答** が必要な場合は WebFlux が依然有利 ([master-spring-ter.medium.com][8])。
+
+### 5‑2‑2　アノテーション vs 機能的エンドポイント
+
+#### アノテーション方式（従来型）
+
+```java
+@RestController
+class GreetingHandler {
+
+  @GetMapping("/hello/{name}")
+  Mono<Greet> hello(@PathVariable String name) {
+    return Mono.just(new Greet("Hi " + name));
+  }
+}
 ```
 
-Kubernetes の **startupProbe** が長時間必要な場合、`management.endpoint.health.group.startup.additional-path=server:/healthz` を活用する。([stackoverflow.com][7])
+#### 機能的エンドポイント
 
----
+```java
+@Configuration
+class Routes {
 
-## 6‑5　運用時プロパティ ― 推奨ベースライン
-
-| カテゴリ      | 推奨値                                                                               | 理由                     |
-| --------- | --------------------------------------------------------------------------------- | ---------------------- |
-| 管理ポート分離   | `management.server.port=9000`                                                     | 本番トラフィックと Actuator を隔離 |
-| エンドポイント公開 | `management.endpoints.web.exposure.include=health,metrics,prometheus`             | 最小公開                   |
-| ヘルス詳細     | `management.endpoint.health.show-details=when-authorized`                         | 機密情報保護                 |
-| ログ上限      | `logging.structured.json.stacktrace.max-length=20`                                | 大量ログ抑止                 |
-| JVM 計測    | `management.metrics.enable.jvm=true`                                              | GC/メモリ監視               |
-| HTTP 分位数  | `management.metrics.distribution.percentiles-histogram.http.server.requests=true` | P95/P99 を取得            |
-
----
-
-## 6‑6　起動高速化と可視化
-
-### 6‑6‑1　Bean バックグラウンド初期化
-
-* 3.5 では `bootstrapExecutor` が自動生成され、**Singleton Bean を非同期で構築**。大規模アプリで *10–30 %* 起動短縮を確認。([infoq.com][8])
-
-### 6‑6‑2　`startup` エンドポイントでタイムライン分析
-
-```bash
-curl http://localhost:9000/actuator/startup | jq '.timeline[] | {bean:.name,duration:.duration}'
+  @Bean
+  RouterFunction<ServerResponse> router() {
+    return RouterFunctions.route()
+        .GET("/hello/{name}",
+             req -> ServerResponse.ok()
+                     .bodyValue("Hi " + req.pathVariable("name")))
+        .build();
+  }
+}
 ```
 
-ステップ単位の時間を把握し、**ボトルネック Bean を特定**できる。([docs.spring.io][1])
+* 関数型は **Bean 生成だけでルーティング** が完結し、AOT・Native Image でメモリ削減効果が大きい。([medium.com][9], [docs.spring.io][10])
+
+### 5‑2‑3　Netty サーバーとチューニング
+
+* `spring-boot-starter-webflux` ⇒ Reactor Netty が既定。HTTP/2 は自動有効（JDK 11+）([docs.spring.io][11])。
+* スレッド数は `reactor.netty.ioWorkerCount`、メモリは `reactor.netty.pool.maxConnections` で制御。
+
+### 5‑2‑4　Virtual Threads との共存シナリオ
+
+* WebFlux の **ブロッキング回避サポート** は仮想スレッドにも適用され (`@Blocking` 相当の制御不要)。
+* ただし **Reactor コンテキスト ⇆ 仮想スレッドの切替コスト** があるため、IO 待ちが短い高速ストリームでは従来のイベントループが優位。([medium.com][12], [medium.com][13])
+
+### 5‑2‑5　Reactive Data & Test
+
+* R2DBC／MongoDB Reactive Driver と組み合わせ、**完全ノンブロッキングパイプライン** を構築。
+* `@WebFluxTest` + `WebTestClient` でエンドポイントを **バインドレスで高速テスト**。
 
 ---
 
-## 6‑7　トラブルシューティングとベストプラクティス
+## 5‑3　宣言的 HTTP クライアント ― RestClient / WebClient
 
-1. **メトリクスが倍増**している場合 → 重複 `MeterRegistry` Bean を検出 (`/actuator/beans`).
-2. **Health が DOWN から復帰しない** → キャッシュされている可能性。`management.endpoint.health.cache.time-to-live=10s` を調整。
-3. **Prometheus でメモリリーク** → High‑cardinality タグを削減、`MeterFilter.deny(id -> id.getTag("userId") != null)` を実装。
-4. **Structured Logging でフィールド欠落** → JSON レイアウト変更後は *必ず* ログパイプライン側でスキーマを更新。
+### 5‑3‑1　RestClient（同期・ブロッキング）
+
+* Spring Boot 3.2 で導入された **関数型 API**。`RestTemplate` より **ビルダー中心** かつ **レコード／kotlin data class** に自然マッピング。([docs.spring.io][14], [docs.spring.io][15])
+
+```java
+@Service
+class CatService(RestClient.Builder builder) {
+
+  private final RestClient client =
+      builder.baseUrl("https://api.example.com").build();
+
+  Cat find(String id) {
+    return client.get().uri("/cats/{id}", id)
+                 .retrieve().body(Cat.class);
+  }
+}
+```
+
+* **HttpMessageConverters** と `ClientHttpRequestFactory` は Boot が注入。タイムアウトは `builder.requestFactory(factory)` で個別指定。
+
+### 5‑3‑2　WebClient（非同期・リアクティブ）
+
+* `Mono` / `Flux` を返して **バックプレッシャー対応**。
+* サーバーと同じ Reactor Netty を共有することで **接続プールを統合** し、メトリクスも併用できる。([docs.spring.io][15])
+
+### 5‑3‑3　SSL バンドルとセキュア通信
+
+* Boot 3.5 の **SSL Bundles** を `RestClientSsl` / `WebClientSsl` でバインドし、証明書設定を 1 行で適用可能。([docs.spring.io][16], [docs.spring.io][15])
+
+```java
+@Bean
+RestClient secure(RestClient.Builder builder, RestClientSsl ssl) {
+  return builder.apply(ssl.fromBundle("corp-tls")).build();
+}
+```
+
+### 5‑3‑4　ベストプラクティス
+
+| 項目                        | RestClient                                              | WebClient                                   |
+| ------------------------- | ------------------------------------------------------- | ------------------------------------------- |
+| 共通ヘッダ                     | `builder.defaultHeader()`                               | `builder.defaultHeader()`                   |
+| ログ／監視                     | `RestClientCustomizer` → `ExchangeFilterFunction` で集中管理 | `ExchangeFilterFunction`                    |
+| Retries / Circuit Breaker | Resilience4j Decorators                                 | `reactor.retry` or Resilience4j             |
+| テスト                       | `MockRestServiceServer`                                 | `WebClient.builder().exchangeFunction(...)` |
+
+> **Virtual Threads × RestClient** : `spring.threads.virtual.enabled=true` で **ブロッキング呼び出しもスレッド浪費を抑制**。外部 API 呼び出しを大量に並列化する際に特に有効。([stackoverflow.com][17])
 
 ---
 
 ### まとめ
 
-本章では **Actuator エンドポイントの公開・保護から、Micrometer によるメトリクス／トレーシング／構造化ログまで**、Spring Boot 3.5 の運用・監視機能を横断的に整理しました。次章では **コンテナ化 & ネイティブビルド** に焦点を移し、Buildpacks や GraalVM によるデプロイ最適化を解説します。
+本章では **Servlet 型 Spring MVC** と **Reactive 型 WebFlux** の使い分け、さらに **新世代 HTTP クライアント (RestClient/WebClient)** を一気通貫で解説しました。次章では Actuator・Micrometer を軸に **運用・モニタリング** 機能を深掘りします。
 
-[1]: https://docs.spring.io/spring-boot/reference/actuator/endpoints.html "Endpoints :: Spring Boot"
-[2]: https://spring.io/blog/2025/05/22/spring-boot-3-5-0-available-now?utm_source=chatgpt.com "Spring Boot 3.5.0 available now"
-[3]: https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.5.0-RC1-Release-Notes?utm_source=chatgpt.com "Spring Boot 3.5.0 RC1 Release Notes - GitHub"
-[4]: https://github.com/spring-projects/spring-boot/releases?utm_source=chatgpt.com "Releases · spring-projects/spring-boot - GitHub"
-[5]: https://spring.io/blog/2022/10/12/observability-with-spring-boot-3?utm_source=chatgpt.com "Observability with Spring Boot 3"
-[6]: https://stackoverflow.com/questions/79530553/observability-with-java-spring-boot-actuator-and-micrometer-annotation-counted?utm_source=chatgpt.com "Observability with java spring boot actuator and micrometer ..."
-[7]: https://stackoverflow.com/questions/68007519/how-to-configure-kubernetes-startup-probe-with-spring-actuator?utm_source=chatgpt.com "How to configure Kubernetes startup probe with Spring Actuator"
-[8]: https://www.infoq.com/news/2025/05/spring-boot-3-5/?utm_source=chatgpt.com "Spring Boot 3.5 Delivers Improved Configuration, Containers, and ..."
+[1]: https://spring.io/guides/gs/spring-boot?utm_source=chatgpt.com "Getting Started | Building an Application with Spring Boot"
+[2]: https://github.com/andbin/spring-boot3-thymeleaf-basic-demo?utm_source=chatgpt.com "Spring Boot 3 – Thymeleaf Basic Demo - GitHub"
+[3]: https://docs.spring.io/spring-boot/api/java/org/springframework/boot/web/servlet/view/MustacheView.html?utm_source=chatgpt.com "MustacheView (Spring Boot 3.5.0 API)"
+[4]: https://www.baeldung.com/spring-mvc-static-resources?utm_source=chatgpt.com "Serve Static Resources with Spring - Baeldung"
+[5]: https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-config/static-resources.html?utm_source=chatgpt.com "Static Resources :: Spring Framework"
+[6]: https://docs.spring.io/spring-boot/reference/features/task-execution-and-scheduling.html?utm_source=chatgpt.com "Task Execution and Scheduling :: Spring Boot"
+[7]: https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.2.0-M1-Release-Notes?utm_source=chatgpt.com "Spring Boot 3.2.0 M1 Release Notes - GitHub"
+[8]: https://master-spring-ter.medium.com/java-virtual-threads-are-here-do-we-still-need-webflux-40250d51c78e?utm_source=chatgpt.com "Java Virtual Threads Are Here: Do We Still Need WebFlux?"
+[9]: https://medium.com/%40AlexanderObregon/registering-functional-endpoints-with-spring-boot-and-routerfunction-4dbac9a4e61b?utm_source=chatgpt.com "Using RouterFunction in Spring Boot - Medium"
+[10]: https://docs.spring.io/spring-framework/reference/web/webflux-functional.html?utm_source=chatgpt.com "Functional Endpoints :: Spring Framework"
+[11]: https://docs.spring.io/spring-boot/how-to/webserver.html?utm_source=chatgpt.com "Embedded Web Servers :: Spring Boot"
+[12]: https://medium.com/%40anand34577/virtual-threads-in-spring-boot-3-2-a-game-changer-for-java-applications-43e6a85c3104?utm_source=chatgpt.com "Virtual Threads in Spring Boot 3.2: A Game-Changer for Java Applications"
+[13]: https://medium.com/%40lgianlucaster/mastering-virtual-threads-in-java-and-spring-boot-many-requests-few-threads-nobody-waits-too-cae73f657f84?utm_source=chatgpt.com "Mastering Virtual Threads in Java and Spring Boot — Many requests, few ..."
+[14]: https://docs.spring.io/spring-boot/reference/io/rest-client.html?utm_source=chatgpt.com "Calling REST Services :: Spring Boot"
+[15]: https://docs.spring.io/spring-boot/reference/io/rest-client.html "Calling REST Services :: Spring Boot"
+[16]: https://docs.spring.io/spring-boot/3.5/api/java/org/springframework/boot/autoconfigure/web/client/RestClientSsl.html?utm_source=chatgpt.com "RestClientSsl (Spring Boot 3.5.0 API)"
+[17]: https://stackoverflow.com/questions/78012861/parallel-service-calls-with-spring-boot-3-2-and-virtual-threads?utm_source=chatgpt.com "Parallel service calls with Spring Boot 3.2 and virtual threads"
