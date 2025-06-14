@@ -1,0 +1,21 @@
+<section class="hero">
+    <div class="hero-background">
+        <div class="container">
+            <div class="hero-content">
+                <h1 class="hero-title">{{ page.hero.title | default: site.title }}</h1>
+                <p class="hero-description">{{ page.hero.description | default: site.description }}</p>
+                
+                {% if page.hero.buttons %}
+                <div class="hero-buttons">
+                    {% for button in page.hero.buttons %}
+                    <a href="{{ button.url | relative_url }}" class="btn btn-{{ button.style | default: 'primary' }}">
+                        {% if button.icon %}<i class="{{ button.icon }}"></i> {% endif %}
+                        {{ button.text }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>

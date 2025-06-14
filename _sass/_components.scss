@@ -1,0 +1,247 @@
+// Components
+
+// Container
+.container {
+  max-width: $container-max-width;
+  margin: 0 auto;
+  padding: 0 $container-padding;
+}
+
+// Buttons
+.btn {
+  display: inline-block;
+  padding: 12px 24px;
+  font-size: $font-size-base;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  border: 2px solid transparent;
+  border-radius: $border-radius;
+  cursor: pointer;
+  transition: all $transition-base;
+  
+  &:hover, &:focus {
+    text-decoration: none;
+    transform: translateY(-1px);
+    box-shadow: $box-shadow;
+  }
+  
+  &.btn-primary {
+    color: white;
+    background-color: $spring-primary;
+    border-color: $spring-primary;
+    
+    &:hover, &:focus {
+      background-color: $spring-accent;
+      border-color: $spring-accent;
+    }
+  }
+  
+  &.btn-secondary {
+    color: $spring-secondary;
+    background-color: transparent;
+    border-color: $spring-secondary;
+    
+    &:hover, &:focus {
+      color: white;
+      background-color: $spring-secondary;
+    }
+  }
+  
+  &.btn-outline {
+    color: $spring-primary;
+    background-color: transparent;
+    border-color: $spring-primary;
+    
+    &:hover, &:focus {
+      color: white;
+      background-color: $spring-primary;
+    }
+  }
+  
+  &.btn-sm {
+    padding: 8px 16px;
+    font-size: 14px;
+  }
+  
+  &.btn-lg {
+    padding: 16px 32px;
+    font-size: 18px;
+  }
+}
+
+// Cards
+.card {
+  background-color: white;
+  border: 1px solid #dee2e6;
+  border-radius: $border-radius-lg;
+  box-shadow: $box-shadow-sm;
+  overflow: hidden;
+  transition: box-shadow $transition-base;
+  
+  &:hover {
+    box-shadow: $box-shadow;
+  }
+  
+  .card-header {
+    padding: $spacer-lg;
+    background-color: $spring-light-gray;
+    border-bottom: 1px solid #dee2e6;
+    
+    .card-title {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: $spring-secondary;
+    }
+  }
+  
+  .card-body {
+    padding: $spacer-lg;
+  }
+  
+  .card-footer {
+    padding: $spacer-lg;
+    background-color: $spring-light-gray;
+    border-top: 1px solid #dee2e6;
+  }
+}
+
+// Feature cards grid
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: $spacer-xl;
+  margin: $spacer-xl 0;
+}
+
+.feature-card {
+  text-align: center;
+  padding: $spacer-xl;
+  
+  .feature-icon {
+    font-size: 3rem;
+    color: $spring-primary;
+    margin-bottom: $spacer-lg;
+  }
+  
+  .feature-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: $spacer-md;
+    color: $spring-secondary;
+  }
+  
+  .feature-description {
+    color: $spring-dark-gray;
+    line-height: 1.6;
+  }
+}
+
+// Alert/Note boxes
+.alert {
+  padding: $spacer-md $spacer-lg;
+  margin-bottom: $spacer-md;
+  border: 1px solid transparent;
+  border-radius: $border-radius;
+  
+  &.alert-info {
+    color: #0c5460;
+    background-color: #d1ecf1;
+    border-color: #b8daff;
+  }
+  
+  &.alert-warning {
+    color: #856404;
+    background-color: #fff3cd;
+    border-color: #ffeaa7;
+  }
+  
+  &.alert-success {
+    color: #155724;
+    background-color: #d4edda;
+    border-color: #c3e6cb;
+  }
+  
+  &.alert-danger {
+    color: #721c24;
+    background-color: #f8d7da;
+    border-color: #f5c6cb;
+  }
+}
+
+// Badge
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: baseline;
+  border-radius: $border-radius-sm;
+  
+  &.badge-primary {
+    color: white;
+    background-color: $spring-primary;
+  }
+  
+  &.badge-secondary {
+    color: white;
+    background-color: $spring-secondary;
+  }
+}
+
+// Code copy button
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background-color: $spring-primary;
+  color: white;
+  border: none;
+  border-radius: $border-radius-sm;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity $transition-fast;
+  
+  &:hover {
+    opacity: 1;
+  }
+}
+
+// Table of contents
+.toc {
+  background-color: $spring-light-gray;
+  border: 1px solid #dee2e6;
+  border-radius: $border-radius;
+  padding: $spacer-lg;
+  margin-bottom: $spacer-xl;
+  
+  .toc-title {
+    margin: 0 0 $spacer-md 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: $spring-secondary;
+  }
+  
+  ul {
+    margin: 0;
+    padding-left: $spacer-md;
+    
+    li {
+      margin-bottom: $spacer-xs;
+    }
+  }
+  
+  a {
+    color: $spring-text;
+    
+    &:hover {
+      color: $spring-primary;
+    }
+  }
+}

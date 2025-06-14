@@ -1,0 +1,18 @@
+<ul class="navbar-nav">
+    {% for nav in site.navigation %}
+    <li class="nav-item">
+        <a href="{{ nav.url | relative_url }}" class="nav-link{% if page.url == nav.url %} active{% endif %}">
+            {{ nav.title }}
+        </a>
+    </li>
+    {% endfor %}
+    
+    <!-- GitHub link -->
+    <li class="nav-item nav-item-github">
+        <a href="https://github.com/{{ site.github_username }}/{{ site.github.repository_name }}" 
+           class="nav-link" target="_blank" rel="noopener">
+            <i class="fab fa-github"></i>
+            <span class="sr-only">GitHub</span>
+        </a>
+    </li>
+</ul>

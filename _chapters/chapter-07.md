@@ -1,3 +1,8 @@
+---
+layout: page
+title: "第 7 章　運用・モニタリング"
+---
+
 # 第 7 章　運用・モニタリング
 
 （Spring Boot 3.5 GA・Micrometer 1.14 系を前提）

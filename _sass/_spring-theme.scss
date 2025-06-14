@@ -1,0 +1,138 @@
+// Spring.io Theme Styles
+
+// Base styles
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: $font-family-base;
+  font-size: $font-size-base;
+  line-height: $line-height-base;
+  color: $spring-text;
+  background-color: $spring-background;
+  margin: 0;
+  padding: 0;
+}
+
+// Headers
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  line-height: 1.2;
+  margin-top: 0;
+  margin-bottom: $spacer-md;
+  color: $spring-secondary;
+}
+
+h1 { font-size: 2.5rem; }
+h2 { font-size: 2rem; }
+h3 { font-size: 1.75rem; }
+h4 { font-size: 1.5rem; }
+h5 { font-size: 1.25rem; }
+h6 { font-size: 1rem; }
+
+// Links
+a {
+  color: $spring-primary;
+  text-decoration: none;
+  transition: color $transition-fast;
+
+  &:hover, &:focus {
+    color: $spring-accent;
+    text-decoration: underline;
+  }
+}
+
+// Paragraphs
+p {
+  margin-top: 0;
+  margin-bottom: $spacer-md;
+}
+
+// Lists
+ul, ol {
+  margin-top: 0;
+  margin-bottom: $spacer-md;
+  padding-left: $spacer-lg;
+}
+
+li {
+  margin-bottom: $spacer-sm;
+}
+
+// Code
+code {
+  padding: 2px 4px;
+  font-size: 87.5%;
+  color: #e83e8c;
+  background-color: #f8f9fa;
+  border-radius: $border-radius-sm;
+}
+
+pre {
+  display: block;
+  padding: $spacer-md;
+  margin-top: 0;
+  margin-bottom: $spacer-md;
+  font-size: 87.5%;
+  color: $spring-text;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: $border-radius;
+  overflow-x: auto;
+
+  code {
+    padding: 0;
+    font-size: inherit;
+    color: inherit;
+    background-color: transparent;
+    border-radius: 0;
+  }
+}
+
+// Tables
+table {
+  width: 100%;
+  margin-bottom: $spacer-md;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+th, td {
+  padding: $spacer-sm $spacer-md;
+  text-align: left;
+  border-bottom: 1px solid #dee2e6;
+}
+
+th {
+  font-weight: 600;
+  color: $spring-secondary;
+  background-color: $spring-light-gray;
+}
+
+// Blockquote
+blockquote {
+  margin: 0 0 $spacer-md;
+  padding: $spacer-md 0 $spacer-md $spacer-lg;
+  border-left: 4px solid $spring-primary;
+  background-color: #f8f9fa;
+  font-style: italic;
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+}
+
+// Images
+img {
+  max-width: 100%;
+  height: auto;
+  border-radius: $border-radius;
+}
+
+// Horizontal rule
+hr {
+  margin: $spacer-xl 0;
+  border: 0;
+  border-top: 1px solid #dee2e6;
+}

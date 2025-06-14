@@ -1,3 +1,8 @@
+---
+layout: page
+title: "第 1 章　Spring Boot とは何か"
+---
+
 # 第 1 章　Spring Boot とは何か
 
 ---
