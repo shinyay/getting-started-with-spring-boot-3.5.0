@@ -1,115 +1,143 @@
-# 第 11 章　付録 ― 逆引きリファレンス集
+# 第 10 章　ベストプラクティス集
+
+（対象バージョン : Spring Boot 3.5 GA／Java 17+）
 
 ---
 
-## 11‑1　主要 `application.properties`／`application.yaml` 早見表
+## 10‑1　プロファイル戦略 ― 「環境差分」をコードレスに封じ込める
 
-| カテゴリ              | プロパティ                                                                        | 既定値                       | 解説                                        |
-| ----------------- | ---------------------------------------------------------------------------- | ------------------------- | ----------------------------------------- |
-| **コアサーバー**        | `server.port`                                                                | `8080`                    | HTTP リスンポート                               |
-|                   | `server.shutdown`                                                            | `IMMEDIATE`               | `GRACEFUL` に変更で Graceful Shutdown         |
-| **データソース**        | `spring.datasource.url`                                                      | なし                        | JDBC 接続 URL                               |
-|                   | `spring.sql.init.mode`                                                       | `embedded`                | `always` で RDB 初期スクリプトを常時実行               |
-| **JPA/Hibernate** | `spring.jpa.hibernate.ddl-auto`                                              | なし                        | `validate` / `update` 等                   |
-|                   | `spring.jpa.open-in-view`                                                    | `true`                    | MVC + JPA でのセッション維持                       |
-| **Actuator**      | `management.endpoints.web.exposure.include`                                  | `health`                  | 公開 ID をカンマ区切りで列挙                          |
-|                   | `management.endpoint.health.show-details`                                    | `never`                   | `when-authorized` で認可後のみ詳細表示              |
-| **ログ**            | `logging.level.root`                                                         | `INFO`                    | `DEBUG` などに上書き                            |
-|                   | `logging.structured.json.format`                                             | `default`                 | `ecs` で ECS‑JSON 出力 ([docs.spring.io][1]) |
-| **プロファイル**        | `spring.profiles.active`                                                     | なし                        | `local,metrics` など複数可                     |
-|                   | `spring.profiles.group.metrics`                                              | `prometheus,file-logging` | ネスト定義                                     |
-| **AOT/Native**    | `spring.aot.enabled`                                                         | `false`                   | JVM モードでも AOT を有効化                        |
-|                   | `spring.native.image.build-args`                                             | なし                        | 追加の `--enable-preview` 等を列挙               |
-| **Observability** | `management.metrics.distribution.percentiles-histogram.http.server.requests` | `false`                   | P95/P99 収集を有効化                            |
-|                   | `management.tracing.sampling.probability`                                    | `1.0`                     | 0.0–1.0 でサンプリング率調整                        |
-| **Container**     | `spring.docker.compose.enabled`                                              | `true`                    | Docker Compose Runner を ON/OFF            |
+### 10‑1‑1　３層プロファイルモデル
 
-*本表は Spring Boot 3.5.0 の **Common Application Properties** から運用頻度の高い項目を抽出しています。詳細は公式 Appendix を参照してください。([docs.spring.io][1])*
+| レイヤー        | 役割          | 代表例                            |
+| ----------- | ----------- | ------------------------------ |
+| **ベース**     | 全環境共通のデフォルト | `default` (暗黙)                 |
+| **ファンクション** | 目的別の ON/OFF | `metrics`, `kafka`, `debug`    |
+| **環境**      | 実行基盤ごと      | `local`, `test`, `stg`, `prod` |
 
----
+*アプリ起動時に `local,metrics` のような **複合指定** が推奨*。役割を縦横に分離することで **“local = prod – x”** の単純差分に収束する。
 
-## 11‑2　スターター & 依存 BOM 対照表（抜粋）
+### 10‑1‑2 `application-{profile}.yaml` だけに依存しない
 
-| Starter Artifact                    | 主なトランジティブ依存                               | 用途例              |
-| ----------------------------------- | ----------------------------------------- | ---------------- |
-| `spring‑boot‑starter`               | spring‑boot, spring‑core, Logback, YAML   | 最小構成             |
-| `spring‑boot‑starter‑web`           | **Tomcat**, Spring MVC, Jackson           | ブロッキング HTTP API  |
-| `spring‑boot‑starter‑webflux`       | **Reactor Netty**, Spring WebFlux         | リアクティブ HTTP      |
-| `spring‑boot‑starter‑data‑jpa`      | Spring Data JPA, Hibernate 6, HikariCP    | ORM／RDB          |
-| `spring‑boot‑starter‑data‑mongodb`  | Spring Data MongoDB, Mongo Java Driver    | NoSQL            |
-| `spring‑boot‑starter‑security`      | Spring Security 6.5                       | 認証・認可            |
-| `spring‑boot‑starter‑oauth2‑client` | Spring Security OAuth2 Client             | OIDC Login       |
-| `spring‑boot‑starter‑amqp`          | Spring AMQP, RabbitMQ Client              | RabbitMQ Pub/Sub |
-| `spring‑boot‑starter‑kafka`         | Spring for Apache Kafka, Kafka Client 4.0 | Kafka Streams    |
-| `spring‑boot‑starter‑batch`         | Spring Batch 5.1                          | バッチ処理            |
-| `spring‑boot‑starter‑actuator`      | Micrometer, Actuator                      | 運用／監視            |
-| `spring‑boot‑starter‑test`          | JUnit Jupiter, AssertJ, Mockito ほか        | テスト              |
+| 手法                            | 使い分け                                                        |                            |
+| ----------------------------- | ----------------------------------------------------------- | -------------------------- |
+| **`spring.profiles.group.*`** | 「ON にしたら自動で別プロファイルも入る」例：`metrics → prometheus,file-logging` |                            |
+| **Profile‑specific beans**    | 例：\`@Profile("kafka                                         | test & !prod")\` でコード単位の分岐 |
+| **Property activation**       | `logging.level.root: ${LOG_LEVEL:INFO}` で **環境変数だけ** 変える    |                            |
 
-> **BOM との関係** : `spring‑boot‑dependencies:3.5.0` を **parent POM** または **Gradle Plugin** が自動適用し、上記すべての **ライブラリバージョンを統一** します。個別バージョン指定は基本的に不要です。([mvnrepository.com][2])
+> **ベストプラクティス** : 設定階層は **YAML < Env‑Var < CLI** を鉄則に。CI では `--spring.profiles.active=stg,metrics` を明示し「あと何が効いているのか」をログで確認する。
+
+### 10‑1‑3　ランタイム切り替えと DevTools
+
+* DevTools が有効な `local` プロファイルでのみ **自動再起動・LiveReload** を ON。
+* `spring.devtools.livereload.enabled=false` を SCM に固定し、「LOCAL\_PC=true」の環境変数で反転させるとコミット汚染を防げる。
 
 ---
 
-## 11‑3　Spring Boot CLI & DevTools リファレンス
+## 10‑2　外部設定 & 構成バリデーション
 
-### 11‑3‑1 CLI 導入
+### 10‑2‑1 `@ConfigurationProperties` でタイプセーフ設定
 
-```bash
-# SDKMAN!
-$ sdk install springboot
-$ spring --version
-Spring CLI v3.5.0
+```java
+@ConfigurationProperties(prefix = "payment")
+@Validated
+record PaymentProps(@NotNull URI endpoint,
+                    @Positive Duration timeout) { }
 ```
 
-*Homebrew (`brew install spring-boot`) や `curl -s https://get.sdkman.io` でも取得可*。([docs.spring.io][3])
+* **Immutable record+binder** が 3.x 推奨パターン。
+* `spring-boot-configuration-processor` を `annotationProcessor` 依存に追加すると **IDE 補完** が生きる。
 
-### 11‑3‑2 主要 CLI コマンド
+### 10‑2‑2　失敗を早く ― **Fail‑Fast 起動** にする
 
-| コマンド                    | 説明                              | 代表オプション                                         |                       |
-| ----------------------- | ------------------------------- | ----------------------------------------------- | --------------------- |
-| `spring init`           | Start.spring.io へリクエストし ZIP を生成 | `--dependencies=web,actuator --java-version=17` |                       |
-| `spring run`            | Groovy/Java/Kotlin ファイルを即実行     | `--watch` でホットリロード                              |                       |
-| `spring encodepassword` | BCrypt ハッシュを生成                  | `--strength=12`                                 |                       |
-| `spring shell`          | 対話式シェル                          | `--debug` で verbose                             | ([docs.spring.io][4]) |
+| 手段                            | 効果                                       |
+| ----------------------------- | ---------------------------------------- |
+| `@Validated` + JSR‑380 注釈     | 値域エラーを **起動時に阻止**                        |
+| **FailureAnalyzer** 実装        | 例：秘密鍵が無い場合に *actionable message* を表示     |
+| `spring.beaninfo.ignore=true` | JavaBean Introspector をスキップし 5–10 % 起動短縮 |
 
-### 11‑3‑3 DevTools 便利機能
+### 10‑2‑3　Config Data API と Secrets 管理
 
-| 機能               | プロパティ                                     | 備考                               |                       |
-| ---------------- | ----------------------------------------- | -------------------------------- | --------------------- |
-| **自動再起動**        | `spring.devtools.restart.enabled=true`    | `target/classes` 監視              |                       |
-| **LiveReload**   | `spring.devtools.livereload.enabled=true` | ブラウザ拡張と連携                        |                       |
-| **Remote Debug** | `spring.devtools.remote.secret=mytoken`   | `/actuator/tunnel` WebSocket     |                       |
-| **属性トンネリング**     | `spring.devtools.add-properties=false`    | `spring.datasource.*` をローカルだけ上書き | ([docs.spring.io][5]) |
+```yaml
+spring:
+  config:
+    import:
+      - vault://secret/data/payment
+      - aws-parameterstore:/myapp/
+      - env:MY_K8S_SECRET        # 3.5 の multi‑line 変数
+```
 
----
+* 認証情報は **Vault/KMS/Secrets Manager** へ。絶対に Git に置かない。
+* **優先順序** : CLI > System prop > ENV > `application*` > Profile‑specific > Import。
 
-## 11‑4　代表的ビルドプラグイン坐標
+### 10‑2‑4　リロード & ローリング更新
 
-| 項目                 | Maven                                               | Gradle                          | 用途                         |
-| ------------------ | --------------------------------------------------- | ------------------------------- | -------------------------- |
-| Spring Boot Plugin | `org.springframework.boot:spring-boot-maven-plugin` | `org.springframework.boot`      | JAR 再パッケージ / `build-image` |
-| GraalVM Native     | `org.graalvm.buildtools.native:native-maven-plugin` | `org.graalvm.buildtools.native` | `nativeCompile`            |
-| Docker Compose     | `io.spring.javaformat` (不要)                         | `springBootDockerCompose` タスク   | Testcontainers 代替          |
-
----
-
-## 11‑5　コマンドライン “逆引き” チートシート
-
-| 目的              | Maven                         | Gradle                     | CLI                 |
-| --------------- | ----------------------------- | -------------------------- | ------------------- |
-| プロジェクト雛形生成      | `curl start.spring.io/...`    | 同左                         | `spring init`       |
-| ローカル実行          | `mvn spring-boot:run`         | `./gradlew bootRun`        | `spring run *.java` |
-| FAT JAR 生成      | `mvn -Pprod package`          | `./gradlew bootJar`        | —                   |
-| Buildpacks イメージ | `mvn spring-boot:build-image` | `./gradlew bootBuildImage` | —                   |
-| ネイティブビルド        | `mvn -Pnative native:compile` | `./gradlew nativeCompile`  | —                   |
+| 技術                                                     | 特徴                                                                                  |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| **Spring Cloud Config**                                | `@ConfigurationProperties` + `@RefreshScope` でオンメモリ置換                               |
+| **Kubernetes ConfigMap + `spring.cloud.kubernetes.*`** | `--spring.cloud.kubernetes.reload.strategy=restart` なら *Zero‑Downtime* Rolling と相性◎ |
+| **CRaC (Checkpoint/Restore)**                          | Properties を載せ替えてもキャッシュから復元可能（Boot 3.2+）                                            |
 
 ---
 
-### おわりに
+## 10‑3　AOT 最適化と Project Leyden 展望
 
-本付録では **設定プロパティ・スターター依存・CLI/DevTools** など「日々の開発術」に直結する逆引き情報をまとめました。書籍本文と合わせて活用することで、Spring Boot 3.5 の機能を **“思い出し 3 秒／調査ゼロ”** で引き出せる開発環境を構築できます。
+### 10‑3‑1　`spring.aot.enabled=true` がもたらす効果
 
-[1]: https://docs.spring.io/spring-boot/appendix/application-properties/index.html?utm_source=chatgpt.com "Common Application Properties :: Spring Boot"
-[2]: https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-starter/3.5.0?utm_source=chatgpt.com "org.springframework.boot » spring-boot-starter » 3.5.0"
-[3]: https://docs.spring.io/spring-boot/installing.html?utm_source=chatgpt.com "Installing Spring Boot"
-[4]: https://docs.spring.io/spring-boot/cli/using-the-cli.html?utm_source=chatgpt.com "Using the CLI :: Spring Boot"
-[5]: https://docs.spring.io/spring-boot/cli/index.html?utm_source=chatgpt.com "Spring Boot CLI :: Spring Boot"
+| 効果                       | 内容                            | 規模感\*     |
+| ------------------------ | ----------------------------- | --------- |
+| **Bean 定義静的化**           | 反射呼び出し → 直接 `new`             | 起動 −15 %  |
+| **クラスパススキャン削減**          | ターゲットパッケージをコード生成              | メモリ −10 % |
+| **プロキシ生成 Ahead‑Of‑Time** | CGLIB → JDK Proxy → ジェネレートソース | メタ領域 −8 % |
+
+\*Spring 社計測の “典型 50 Bean アプリ” 例。
+
+```bash
+./mvnw -Pnative -DspringAot
+```
+
+で **JVM モード** でも AOT コードが動くため、「起動高速化だけ欲しい」場合に最適。
+
+### 10‑3‑2　AOT 向けコーディングガイド
+
+| NG パターン              | 置き換え                        | 理由           |
+| -------------------- | --------------------------- | ------------ |
+| 乱用 `Class.forName()` | `ObjectProvider<T>`         | リフレクションヒント不要 |
+| JDK ダイナミックプロキシ手動生成   | `@JdkProxyHint` + インタフェース設計 | 自動ヒントへ寄せる    |
+| SpEL in YAML         | Java Config / `@Bean`       | AST 解釈コスト削減  |
+
+### 10‑3‑3　Project Leyden と “Static Image”
+
+* OpenJDK 22+ で議論中の **CDS + AOT → static image** パスは、Boot AOT とほぼ同一のリフレクション排除思想。
+* 将来は **“Leyden target”** が Maven/Gradle プラグインに追加され、`nativeCompile` と並列運用される見込み。
+
+> **見据えるべきポイント** : Boot‑AOT は **「Leyden へ向けた予習」**。成果物フォーマットが変わっても、どの Bean が反射を使うかを**今のうちに潰しておく**ことが移行コストを最小化する鍵。
+
+---
+
+## 10‑4　コードベース設計・運用ベストプラクティス（抜粋）
+
+| カテゴリ                 | 推奨                                                        | Why               |
+| -------------------- | --------------------------------------------------------- | ----------------- |
+| **パッケージ構造**          | `web → service → repository → domain` の **縦分割**           | スライステスト時のスキャン制御が楽 |
+| **DTO への MapStruct** | サービス層で `Mapper` インタフェースを DI                               | リフレクション不要＋Null 安全 |
+| **共通ユーティリティ**        | `spring-boot-starter-<corp>` + Auto‑config                | コードコピーをスターターへ昇格   |
+| **依存更新**             | Dependabot + `./mvnw versions:display-dependency-updates` | CVE を当日中に検知       |
+| **静的解析**             | ErrorProne / SpotBugs AOT モジュールへ hook                     | Native ヒント漏れも同時発見 |
+
+---
+
+## 10‑5　観測性・ログ設計ベストプラクティス
+
+| 項目                   | ベースライン                                                          |
+| -------------------- | --------------------------------------------------------------- |
+| ログ形式                 | `logging.structured.json.format=ecs` で **ECS‑JSON** 統一          |
+| ID 伝搬                | `logging.structured.correlation.enabled=true` → `trace_id` 自動付与 |
+| メトリクス Tag            | 不変 (`region`,`app`,`instance`) と変動 (`status`) を分離               |
+| High‑cardinality ガード | `MeterFilter.deny(id -> id.getTag("userId")!=null)`             |
+| 分布ヒストグラム             | HTTP, DB, Kafka すべてに `percentiles-histogram` を設定                |
+
+---
+
+### まとめ
+
+本章では **プロファイル階層設計・外部設定の型安全化・AOT/Static Image を見据えた最適化** といった “アプリ全体の非機能品質” を高める指針を整理しました。次章の付録では、ここで触れたプロパティやスターターの **逆引きリファレンス** を一括掲載します。

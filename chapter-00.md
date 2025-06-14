@@ -25,6 +25,17 @@
 
 > **必須前提** : Java 17 以上がインストール済みであること。
 > **推奨** : Docker／Docker Compose、Git に触れた経験があると実習がスムーズです。
+> 
+> ### 環境要件
+> * **Java**: 17 (LTS), 21 (LTS) または 24 EA（本書のコード例は全バージョンで検証済み）
+> * **Spring Boot**: 3.5.0 以上
+> * **ビルドツール**: Maven 3.9+ または Gradle 8.5+
+> * **コンテナ**: Docker 20.10+ および Docker Compose V2
+> * **OS**: Windows 10+, macOS 12+, Linux (Ubuntu 20.04+ 推奨)
+>
+> ### リンク
+> * **課題管理**: [GitHub Issues](https://github.com/awesome-springboot-3.5-book/issues)
+> * **議論フォーラム**: [GitHub Discussions](https://github.com/awesome-springboot-3.5-book/discussions)
 
 ---
 

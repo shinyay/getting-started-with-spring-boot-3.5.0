@@ -160,10 +160,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-class HelloController {
+public class HelloController {  // Made public per G-1 convention
 
     @GetMapping("/")
-    String index() {
+    public String index() {  // Made public for consistency
         return "Greetings from Spring Boot!";
     }
 }
@@ -180,6 +180,8 @@ class HelloController {
 | 本番 JAR 生成     | `mvn -Pprod package` *(例)*                 | `./gradlew bootJar`                            |
 | 実行            | `java -jar target/demo-0.0.1-SNAPSHOT.jar` | `java -jar build/libs/demo-0.0.1-SNAPSHOT.jar` |
 | コンテナイメージ化     | `mvn spring-boot:build-image`              | `./gradlew bootBuildImage`                     |
+| ネイティブイメージ生成   | `mvn -Pnative spring-boot:build-image`     | `./gradlew nativeCompile`                      |
+| ネイティブイメージ実行   | `./target/demo`                            | `./build/native/nativeCompile/demo`            |
 
 **動作確認**
 
@@ -204,5 +206,6 @@ curl http://localhost:8080/
 ## まとめ
 
 本章では **Spring Initializr での雛形生成** から **Maven／Gradle の実践的なビルド設定**、そして **最小 “Hello World” アプリ** の作成と実行までを体系的に解説しました。ここで示したプロジェクト雛形とビルド知識を土台に、次章以降で **Auto‑configuration** や **スターター依存** の内部メカニズムを掘り下げていきます。
+> **次のステップ**: データベースを使うアプリケーションを作成したい場合は、**第 5 章 データ永続化** を参照してください。JPA・Spring Data・R2DBC の実践的な使い方を詳しく解説しています。
 
 [1]: https://docs.spring.io/spring-boot/gradle-plugin/index.html "Gradle Plugin :: Spring Boot"

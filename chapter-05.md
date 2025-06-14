@@ -1,204 +1,491 @@
-# 第 5 章　Web アプリ開発 ― Spring MVC／WebFlux／HTTP クライアント
+# 第 5 章　データ永続化 ― JPA・Spring Data・R2DBC
 
-（Spring Boot 3.5 GA・Java 17+ 前提）
-
----
-
-## 5‑1　Spring MVC ― テンプレート & 従来型サーブレットスタック
-
-### 5‑1‑1　最小構成と自動設定
-
-* `spring-boot-starter-web` を依存に追加すると、**DispatcherServlet・Jackson・Thymeleaf/Mustache の各 Bean** が自動登録される。([spring.io][1])
-* コントローラは最上位パッケージ配下に配置し、`@GetMapping` 等で URL を割り当てる。
-
-```java
-@Controller
-class HomeController {
-
-  @GetMapping("/")
-  String index(Model model) {
-    model.addAttribute("msg", "Hello, Spring MVC!");
-    return "index";        // src/main/resources/templates/index.html
-  }
-}
-```
-
-> **ポイント** : Boot 3.x では Jakarta Servlet 6.0 依存に移行しているため import は `jakarta.servlet.*` になる。
-
-### 5‑1‑2　テンプレートエンジン選択
-
-| エンジン          | 依存 (starter)                    | 特徴                                                                   |
-| ------------- | ------------------------------- | -------------------------------------------------------------------- |
-| **Thymeleaf** | `spring-boot-starter-thymeleaf` | HTML5 方言で自然テンプレートを保つ。レイアウトは \[Layout Dialect] で拡張可。([github.com][2]) |
-| **Mustache**  | `spring-boot-starter-mustache`  | ロジックレス。1 ファイル＝1 View の静的サイト生成に向く。([docs.spring.io][3])               |
-
-Boot が自動生成する `SpringTemplateEngine` / `Mustache.Compiler` は **キャッシュ ON** が既定。開発時は `spring.thymeleaf.cache=false` にして再読み込みを有効化する。
-
-### 5‑1‑3　静的リソースと WebJar
-
-* classpath :`/static`, `/public`, `/META-INF/resources` 直下は **「/」に直結** して公開される。([baeldung.com][4], [docs.spring.io][5])
-* WebJar（例：`org.webjars.npm:bootstrap`）を利用すると  `/webjars/bootstrap/5.3.3/js/bootstrap.bundle.js` のように配信可能。CDN を嫌う企業内ネットワークで便利。
-
-### 5‑1‑4　フォーム処理とバリデーション
-
-1. DTO に `@NotNull`, `@Size` 等の Jakarta Bean Validation アノテーションを付与。
-2. コントローラ引数に `@Valid` と `BindingResult` を置く。
-3. エラーは `th:errors="*{field}"` で表示。
-
-```java
-@PostMapping("/signup")
-String signup(@Valid @ModelAttribute UserForm form, BindingResult rs) {
-  if (rs.hasErrors()) return "signup";
-  service.create(form);
-  return "redirect:/";
-}
-```
-
-### 5‑1‑5　HttpMessageConverters とコンテンツネゴシエーション
-
-* Boot は **23 種** の `HttpMessageConverter` を自動登録し、`Accept` ヘッダと拡張子で **JSON ↔ XML ↔ YAML** を切替える。
-* カスタム MIME を追加したい場合は `WebMvcConfigurer#extendMessageConverters` を実装するだけでよい。
-
-### 5‑1‑6　Virtual Threads 併用時の MVC
-
-* `spring.threads.virtual.enabled=true`（Java 21 以上）で **リクエスト処理スレッドが仮想スレッド化** される。([docs.spring.io][6], [github.com][7])
-* I/O 待ちが長いがリアクティブに書き換えるほどではない API では **同一コードでスループットを向上** できる。
-* `@Async` や `@Scheduled` も自動で仮想スレッド実行になるため、スレッドプールサイズ調整の負荷が減る。
+（Spring Boot 3.5 GA・Java 17+ 前提）
 
 ---
 
-## 5‑2　Spring WebFlux ― リアクティブ & ノンブロッキング
+## 5‑1　JPA クイックスタート
 
-### 5‑2‑1　WebFlux を選択する判断軸
+### 5‑1‑1　基本セットアップ
 
-| 要件                      | MVC (Servlet) | WebFlux (Reactive) |
-| ----------------------- | ------------- | ------------------ |
-| 高同時接続 / SSE / WebSocket | △（従来スレッドモデル）  | ◎（ノンブロッキング I/O）    |
-| レガシー同期ライブラリ利用           | ◎             | △（ブロッキング注意）        |
-| 既存コード資産                 | ◎             | ▲（Mono/Flux へ書換え）  |
+Spring Boot で JPA を利用するには `spring-boot-starter-data-jpa` を依存に追加するだけで、**Hibernate・HikariCP・Transaction Manager** が自動設定されます。
 
-Virtual Threads で MVC の同時実行性が向上したとはいえ、**バックプレッシャー制御・ストリーミング応答** が必要な場合は WebFlux が依然有利 ([master-spring-ter.medium.com][8])。
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-jpa</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.h2database</groupId>
+    <artifactId>h2</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
 
-### 5‑2‑2　アノテーション vs 機能的エンドポイント
-
-#### アノテーション方式（従来型）
+### 5‑1‑2　エンティティの定義
 
 ```java
-@RestController
-class GreetingHandler {
+package com.example.demo.entity;
 
-  @GetMapping("/hello/{name}")
-  Mono<Greet> hello(@PathVariable String name) {
-    return Mono.just(new Greet("Hi " + name));
-  }
+import jakarta.persistence.*;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "users")
+public class User {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @NotNull
+    @Size(min = 2, max = 50)
+    @Column(nullable = false, length = 50)
+    private String username;
+    
+    @NotNull
+    @Size(min = 1, max = 100)
+    @Column(nullable = false, length = 100)
+    private String email;
+    
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+    
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+    }
+    
+    // コンストラクタ、getter、setter は省略
+    
+    public User() {}
+    
+    public User(String username, String email) {
+        this.username = username;
+        this.email = email;
+    }
+    
+    // getter/setter methods...
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    
+    public String getUsername() { return username; }
+    public void setUsername(String username) { this.username = username; }
+    
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }
 ```
 
-#### 機能的エンドポイント
+### 5‑1‑3　リポジトリの作成
 
 ```java
-@Configuration
-class Routes {
+package com.example.demo.repository;
 
-  @Bean
-  RouterFunction<ServerResponse> router() {
-    return RouterFunctions.route()
-        .GET("/hello/{name}",
-             req -> ServerResponse.ok()
-                     .bodyValue("Hi " + req.pathVariable("name")))
-        .build();
-  }
+import com.example.demo.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+    
+    // クエリメソッド自動生成
+    Optional<User> findByUsername(String username);
+    
+    List<User> findByEmailContaining(String emailPart);
+    
+    // カスタムクエリ
+    @Query("SELECT u FROM User u WHERE u.username LIKE %:keyword% OR u.email LIKE %:keyword%")
+    List<User> searchByKeyword(@Param("keyword") String keyword);
+    
+    // ネイティブクエリ
+    @Query(value = "SELECT COUNT(*) FROM users WHERE created_at > ?1", nativeQuery = true)
+    long countUsersCreatedAfter(LocalDateTime dateTime);
 }
 ```
 
-* 関数型は **Bean 生成だけでルーティング** が完結し、AOT・Native Image でメモリ削減効果が大きい。([medium.com][9], [docs.spring.io][10])
+### 5‑1‑4　基本的な CRUD 操作
 
-### 5‑2‑3　Netty サーバーとチューニング
+```java
+package com.example.demo.service;
 
-* `spring-boot-starter-webflux` ⇒ Reactor Netty が既定。HTTP/2 は自動有効（JDK 11+）([docs.spring.io][11])。
-* スレッド数は `reactor.netty.ioWorkerCount`、メモリは `reactor.netty.pool.maxConnections` で制御。
+import com.example.demo.entity.User;
+import com.example.demo.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-### 5‑2‑4　Virtual Threads との共存シナリオ
+import java.util.List;
+import java.util.Optional;
 
-* WebFlux の **ブロッキング回避サポート** は仮想スレッドにも適用され (`@Blocking` 相当の制御不要)。
-* ただし **Reactor コンテキスト ⇆ 仮想スレッドの切替コスト** があるため、IO 待ちが短い高速ストリームでは従来のイベントループが優位。([medium.com][12], [medium.com][13])
-
-### 5‑2‑5　Reactive Data & Test
-
-* R2DBC／MongoDB Reactive Driver と組み合わせ、**完全ノンブロッキングパイプライン** を構築。
-* `@WebFluxTest` + `WebTestClient` でエンドポイントを **バインドレスで高速テスト**。
+@Service
+@Transactional
+public class UserService {
+    
+    @Autowired
+    private UserRepository userRepository;
+    
+    // 作成
+    public User createUser(String username, String email) {
+        User user = new User(username, email);
+        return userRepository.save(user);
+    }
+    
+    // 読み取り
+    @Transactional(readOnly = true)
+    public Optional<User> findUserById(Long id) {
+        return userRepository.findById(id);
+    }
+    
+    @Transactional(readOnly = true)
+    public List<User> findAllUsers() {
+        return userRepository.findAll();
+    }
+    
+    @Transactional(readOnly = true)
+    public Optional<User> findUserByUsername(String username) {
+        return userRepository.findByUsername(username);
+    }
+    
+    // 更新
+    public User updateUser(Long id, String newEmail) {
+        return userRepository.findById(id)
+            .map(user -> {
+                user.setEmail(newEmail);
+                return userRepository.save(user); // Dirty Checking で自動更新
+            })
+            .orElseThrow(() -> new RuntimeException("User not found"));
+    }
+    
+    // 削除
+    public void deleteUser(Long id) {
+        userRepository.deleteById(id);
+    }
+}
+```
 
 ---
 
-## 5‑3　宣言的 HTTP クライアント ― RestClient / WebClient
+## 5‑2　JPA ベストプラクティス
 
-### 5‑3‑1　RestClient（同期・ブロッキング）
+### 5‑2‑1　ローディング戦略
 
-* Spring Boot 3.2 で導入された **関数型 API**。`RestTemplate` より **ビルダー中心** かつ **レコード／kotlin data class** に自然マッピング。([docs.spring.io][14], [docs.spring.io][15])
+**遅延ローディング（Lazy Loading）** をデフォルトとし、必要な場合のみ **Eager Loading** や **@EntityGraph** を使用する：
+
+```java
+@Entity
+public class Order {
+    @Id
+    @GeneratedValue
+    private Long id;
+    
+    // 多対一は通常 EAGER だが、パフォーマンスを考慮して LAZY に変更
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private User user;
+    
+    // 一対多は LAZY がデフォルト
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private List<OrderItem> items = new ArrayList<>();
+}
+```
+
+**@EntityGraph による選択的フェッチ**：
+
+```java
+public interface OrderRepository extends JpaRepository<Order, Long> {
+    
+    @EntityGraph(attributePaths = {"user", "items"})
+    @Query("SELECT o FROM Order o WHERE o.id = :id")
+    Optional<Order> findByIdWithUserAndItems(@Param("id") Long id);
+}
+```
+
+### 5‑2‑2　ページングとソート
 
 ```java
 @Service
-class CatService(RestClient.Builder builder) {
-
-  private final RestClient client =
-      builder.baseUrl("https://api.example.com").build();
-
-  Cat find(String id) {
-    return client.get().uri("/cats/{id}", id)
-                 .retrieve().body(Cat.class);
-  }
+@Transactional(readOnly = true)
+public class UserService {
+    
+    public Page<User> findUsersWithPaging(int page, int size, String sortBy) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy));
+        return userRepository.findAll(pageable);
+    }
+    
+    public Page<User> searchUsersWithPaging(String keyword, Pageable pageable) {
+        return userRepository.findByUsernameContainingIgnoreCase(keyword, pageable);
+    }
 }
 ```
 
-* **HttpMessageConverters** と `ClientHttpRequestFactory` は Boot が注入。タイムアウトは `builder.requestFactory(factory)` で個別指定。
-
-### 5‑3‑2　WebClient（非同期・リアクティブ）
-
-* `Mono` / `Flux` を返して **バックプレッシャー対応**。
-* サーバーと同じ Reactor Netty を共有することで **接続プールを統合** し、メトリクスも併用できる。([docs.spring.io][15])
-
-### 5‑3‑3　SSL バンドルとセキュア通信
-
-* Boot 3.5 の **SSL Bundles** を `RestClientSsl` / `WebClientSsl` でバインドし、証明書設定を 1 行で適用可能。([docs.spring.io][16], [docs.spring.io][15])
+### 5‑2‑3　トランザクション境界の管理
 
 ```java
-@Bean
-RestClient secure(RestClient.Builder builder, RestClientSsl ssl) {
-  return builder.apply(ssl.fromBundle("corp-tls")).build();
+@Service
+public class OrderService {
+    
+    @Autowired
+    private OrderRepository orderRepository;
+    
+    @Autowired
+    private InventoryService inventoryService;
+    
+    @Transactional // メソッドレベルでのトランザクション管理
+    public Order processOrder(OrderRequest request) {
+        // 1. 在庫確認・減算（別サービス）
+        inventoryService.reserveItems(request.getItems());
+        
+        // 2. 注文作成
+        Order order = new Order(request.getUserId());
+        request.getItems().forEach(item -> 
+            order.addItem(new OrderItem(item.getProductId(), item.getQuantity()))
+        );
+        
+        // 3. 保存
+        return orderRepository.save(order);
+    }
+    
+    @Transactional(readOnly = true) // 読み取り専用でパフォーマンス向上
+    public List<Order> findUserOrders(Long userId) {
+        return orderRepository.findByUserIdOrderByCreatedAtDesc(userId);
+    }
 }
 ```
-
-### 5‑3‑4　ベストプラクティス
-
-| 項目                        | RestClient                                              | WebClient                                   |
-| ------------------------- | ------------------------------------------------------- | ------------------------------------------- |
-| 共通ヘッダ                     | `builder.defaultHeader()`                               | `builder.defaultHeader()`                   |
-| ログ／監視                     | `RestClientCustomizer` → `ExchangeFilterFunction` で集中管理 | `ExchangeFilterFunction`                    |
-| Retries / Circuit Breaker | Resilience4j Decorators                                 | `reactor.retry` or Resilience4j             |
-| テスト                       | `MockRestServiceServer`                                 | `WebClient.builder().exchangeFunction(...)` |
-
-> **Virtual Threads × RestClient** : `spring.threads.virtual.enabled=true` で **ブロッキング呼び出しもスレッド浪費を抑制**。外部 API 呼び出しを大量に並列化する際に特に有効。([stackoverflow.com][17])
 
 ---
 
-### まとめ
+## 5‑3　R2DBC による リアクティブデータアクセス
 
-本章では **Servlet 型 Spring MVC** と **Reactive 型 WebFlux** の使い分け、さらに **新世代 HTTP クライアント (RestClient/WebClient)** を一気通貫で解説しました。次章では Actuator・Micrometer を軸に **運用・モニタリング** 機能を深掘りします。
+### 5‑3‑1　R2DBC セットアップ
 
-[1]: https://spring.io/guides/gs/spring-boot?utm_source=chatgpt.com "Getting Started | Building an Application with Spring Boot"
-[2]: https://github.com/andbin/spring-boot3-thymeleaf-basic-demo?utm_source=chatgpt.com "Spring Boot 3 – Thymeleaf Basic Demo - GitHub"
-[3]: https://docs.spring.io/spring-boot/api/java/org/springframework/boot/web/servlet/view/MustacheView.html?utm_source=chatgpt.com "MustacheView (Spring Boot 3.5.0 API)"
-[4]: https://www.baeldung.com/spring-mvc-static-resources?utm_source=chatgpt.com "Serve Static Resources with Spring - Baeldung"
-[5]: https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-config/static-resources.html?utm_source=chatgpt.com "Static Resources :: Spring Framework"
-[6]: https://docs.spring.io/spring-boot/reference/features/task-execution-and-scheduling.html?utm_source=chatgpt.com "Task Execution and Scheduling :: Spring Boot"
-[7]: https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.2.0-M1-Release-Notes?utm_source=chatgpt.com "Spring Boot 3.2.0 M1 Release Notes - GitHub"
-[8]: https://master-spring-ter.medium.com/java-virtual-threads-are-here-do-we-still-need-webflux-40250d51c78e?utm_source=chatgpt.com "Java Virtual Threads Are Here: Do We Still Need WebFlux?"
-[9]: https://medium.com/%40AlexanderObregon/registering-functional-endpoints-with-spring-boot-and-routerfunction-4dbac9a4e61b?utm_source=chatgpt.com "Using RouterFunction in Spring Boot - Medium"
-[10]: https://docs.spring.io/spring-framework/reference/web/webflux-functional.html?utm_source=chatgpt.com "Functional Endpoints :: Spring Framework"
-[11]: https://docs.spring.io/spring-boot/how-to/webserver.html?utm_source=chatgpt.com "Embedded Web Servers :: Spring Boot"
-[12]: https://medium.com/%40anand34577/virtual-threads-in-spring-boot-3-2-a-game-changer-for-java-applications-43e6a85c3104?utm_source=chatgpt.com "Virtual Threads in Spring Boot 3.2: A Game-Changer for Java Applications"
-[13]: https://medium.com/%40lgianlucaster/mastering-virtual-threads-in-java-and-spring-boot-many-requests-few-threads-nobody-waits-too-cae73f657f84?utm_source=chatgpt.com "Mastering Virtual Threads in Java and Spring Boot — Many requests, few ..."
-[14]: https://docs.spring.io/spring-boot/reference/io/rest-client.html?utm_source=chatgpt.com "Calling REST Services :: Spring Boot"
-[15]: https://docs.spring.io/spring-boot/reference/io/rest-client.html "Calling REST Services :: Spring Boot"
-[16]: https://docs.spring.io/spring-boot/3.5/api/java/org/springframework/boot/autoconfigure/web/client/RestClientSsl.html?utm_source=chatgpt.com "RestClientSsl (Spring Boot 3.5.0 API)"
-[17]: https://stackoverflow.com/questions/78012861/parallel-service-calls-with-spring-boot-3-2-and-virtual-threads?utm_source=chatgpt.com "Parallel service calls with Spring Boot 3.2 and virtual threads"
+非同期・ノンブロッキングなデータアクセスを実現する **R2DBC** は、WebFlux との組み合わせで真価を発揮します。
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-r2dbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>io.r2dbc</groupId>
+    <artifactId>r2dbc-h2</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
+
+**設定**：
+
+```yaml
+spring:
+  r2dbc:
+    url: r2dbc:h2:mem:///testdb
+    username: sa
+    password: 
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+```
+
+### 5‑3‑2　リアクティブエンティティとリポジトリ
+
+```java
+package com.example.demo.entity;
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.relational.core.mapping.Table;
+import java.time.LocalDateTime;
+
+@Table("products")
+public class Product {
+    
+    @Id
+    private Long id;
+    
+    private String name;
+    private Double price;
+    private LocalDateTime createdAt;
+    
+    // constructors, getters, setters...
+    public Product() {}
+    
+    public Product(String name, Double price) {
+        this.name = name;
+        this.price = price;
+        this.createdAt = LocalDateTime.now();
+    }
+    
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    
+    public Double getPrice() { return price; }
+    public void setPrice(Double price) { this.price = price; }
+    
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+}
+```
+
+```java
+package com.example.demo.repository;
+
+import com.example.demo.entity.Product;
+import org.springframework.data.r2dbc.repository.Query;
+import org.springframework.data.r2dbc.repository.R2dbcRepository;
+import org.springframework.stereotype.Repository;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+@Repository
+public interface ProductRepository extends R2dbcRepository<Product, Long> {
+    
+    Flux<Product> findByNameContaining(String name);
+    
+    Flux<Product> findByPriceBetween(Double minPrice, Double maxPrice);
+    
+    @Query("SELECT * FROM products WHERE price > :price ORDER BY price DESC")
+    Flux<Product> findExpensiveProducts(Double price);
+    
+    @Query("SELECT COUNT(*) FROM products WHERE price < :maxPrice")
+    Mono<Long> countAffordableProducts(Double maxPrice);
+}
+```
+
+### 5‑3‑3　リアクティブサービス
+
+```java
+package com.example.demo.service;
+
+import com.example.demo.entity.Product;
+import com.example.demo.repository.ProductRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+@Service
+public class ProductService {
+    
+    @Autowired
+    private ProductRepository productRepository;
+    
+    public Mono<Product> createProduct(String name, Double price) {
+        Product product = new Product(name, price);
+        return productRepository.save(product);
+    }
+    
+    public Flux<Product> findAllProducts() {
+        return productRepository.findAll();
+    }
+    
+    public Mono<Product> findProductById(Long id) {
+        return productRepository.findById(id);
+    }
+    
+    public Flux<Product> searchProducts(String keyword) {
+        return productRepository.findByNameContaining(keyword);
+    }
+    
+    public Flux<Product> findProductsInPriceRange(Double minPrice, Double maxPrice) {
+        return productRepository.findByPriceBetween(minPrice, maxPrice);
+    }
+    
+    public Mono<Product> updateProduct(Long id, String newName, Double newPrice) {
+        return productRepository.findById(id)
+            .map(product -> {
+                product.setName(newName);
+                product.setPrice(newPrice);
+                return product;
+            })
+            .flatMap(productRepository::save);
+    }
+    
+    public Mono<Void> deleteProduct(Long id) {
+        return productRepository.deleteById(id);
+    }
+}
+```
+
+### 5‑3‑4　WebFlux コントローラーとの統合
+
+```java
+package com.example.demo.web;
+
+import com.example.demo.entity.Product;
+import com.example.demo.service.ProductService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+@RestController
+@RequestMapping("/api/products")
+public class ProductController {
+    
+    @Autowired
+    private ProductService productService;
+    
+    @GetMapping
+    public Flux<Product> getAllProducts() {
+        return productService.findAllProducts();
+    }
+    
+    @GetMapping("/{id}")
+    public Mono<Product> getProduct(@PathVariable Long id) {
+        return productService.findProductById(id);
+    }
+    
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public Mono<Product> createProduct(@RequestBody Product product) {
+        return productService.createProduct(product.getName(), product.getPrice());
+    }
+    
+    @PutMapping("/{id}")
+    public Mono<Product> updateProduct(@PathVariable Long id, @RequestBody Product product) {
+        return productService.updateProduct(id, product.getName(), product.getPrice());
+    }
+    
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> deleteProduct(@PathVariable Long id) {
+        return productService.deleteProduct(id);
+    }
+    
+    @GetMapping("/search")
+    public Flux<Product> searchProducts(@RequestParam String keyword) {
+        return productService.searchProducts(keyword);
+    }
+}
+```
+
+---
+
+## まとめ
+
+本章では Spring Boot 3.5 での **データ永続化** の主要アプローチを解説しました：
+
+* **JPA/Hibernate** - 従来型の ORM による同期データアクセス
+* **Spring Data JPA** - リポジトリパターンによる定型処理の自動化
+* **R2DBC** - リアクティブプログラミングモデルでの非同期データアクセス
+
+次章では、これらのデータアクセス層を活用した **Web アプリケーション開発** について詳しく見ていきます。
+
+[1]: https://docs.spring.io/spring-boot/docs/current/reference/html/data.html "Spring Boot Data Documentation"
+[2]: https://spring.io/projects/spring-data-jpa "Spring Data JPA"
+[3]: https://r2dbc.io/ "R2DBC Specification"
+[4]: https://docs.spring.io/spring-data/r2dbc/docs/current/reference/html/ "Spring Data R2DBC Reference"

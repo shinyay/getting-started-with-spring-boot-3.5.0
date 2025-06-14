@@ -39,6 +39,47 @@
 * Actuator の **`/actuator/conditions`** エンドポイントが *Condition Evaluation Report* を JSON で返し、「どの Auto‑config が採用／却下されたか」を確認できます。 ([docs.spring.io][4])
 * 同報告は起動ログにも `CONDITIONS EVALUATION REPORT` として出力でき（`debug=true`）、CI で逸脱を検知可能。
 
+### 4‑1‑6　Auto‑configuration 処理フロー図
+
+以下のシーケンス図は、Spring Boot 起動時の自動設定処理の流れを示しています：
+
+```plantuml
+@startuml
+participant "SpringApplication" as App
+participant "ConfigurationClassParser" as Parser  
+participant "AutoConfigurationImportSelector" as Selector
+participant "OnClassCondition" as Condition
+participant "ConfigurationPropertyBinder" as Binder
+participant "BeanFactory" as Factory
+
+App -> Parser: processConfigurationClass()
+Parser -> Selector: selectImports()
+Selector -> Selector: getAutoConfigurationEntry()
+note right: META-INF/spring/\norg.springframework.boot.autoconfigure.\nAutoConfiguration.imports読み込み
+
+Selector -> Condition: matches()
+note right: @ConditionalOnClass\n@ConditionalOnProperty\n等の条件評価
+
+alt 条件が満たされた場合
+    Condition -> Binder: bind properties
+    note right: application.properties\nから設定値を取得
+    
+    Binder -> Factory: registerBeanDefinition()
+    note right: Bean定義を登録
+    
+    Factory -> Factory: instantiate beans
+    note right: Bean インスタンス化
+else 条件が満たされない場合
+    Condition -> App: skip configuration
+    note right: この自動設定をスキップ
+end
+
+App -> App: complete startup
+@enduml
+```
+
+> **図解ポイント**: 各 `@ConditionalOn*` アノテーションが段階的に評価され、条件を満たした場合のみ Bean が登録される仕組みが可視化されています。
+
 ---
 
 ## 4‑2　スターター依存の設計思想
@@ -146,6 +187,37 @@ new ApplicationContextRunner()
 ```
 
 *統合*：`@SpringBootTest` でスターター依存を追加しただけのダミーアプリを起動し、エンドポイント疎通を確認。
+
+**カスタムスターター統合テストの実装例**：
+
+```java
+@SpringBootTest
+@TestPropertySource(properties = {
+    "my.feature.endpoint=http://localhost:8080/api",
+    "my.feature.enabled=true"
+})
+class MyFeatureStarterIntegrationTest {
+
+    @Autowired
+    private MyFeatureClient myFeatureClient; // 自動設定されたBean
+
+    @Test
+    void autoConfigurationShouldProvideClient() {
+        // スターターにより自動設定されたクライアントが利用可能であることを検証
+        assertThat(myFeatureClient).isNotNull();
+        assertThat(myFeatureClient.getEndpoint()).isEqualTo("http://localhost:8080/api");
+    }
+
+    @Test  
+    @DirtiesContext // Bean定義の汚染を避ける
+    void clientShouldBeConditionallyCreated() {
+        // 条件に応じてBeanが作成されることを検証
+        assertThat(myFeatureClient.isEnabled()).isTrue();
+    }
+}
+```
+
+> **ポイント**: `@SpringBootTest` では実際のアプリケーションコンテキストが起動するため、プロパティバインディングや条件評価を含む完全な自動設定フローをテストできます。
 
 ### 4‑3‑5　公開とメンテナンス
 

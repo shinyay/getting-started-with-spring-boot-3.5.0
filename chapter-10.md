@@ -1,143 +1,193 @@
-# 第 10 章　ベストプラクティス集
-
-（対象バージョン : Spring Boot 3.5 GA／Java 17+）
+# 第 9 章　テスト手法 — Spring Boot 3.5 時代の “確かな品質ゲート”
 
 ---
 
-## 10‑1　プロファイル戦略 ― 「環境差分」をコードレスに封じ込める
+## 9‑1　単体テストの基本
 
-### 10‑1‑1　３層プロファイルモデル
+### 9‑1‑1 `spring‑boot‑starter‑test` の内訳
 
-| レイヤー        | 役割          | 代表例                            |
-| ----------- | ----------- | ------------------------------ |
-| **ベース**     | 全環境共通のデフォルト | `default` (暗黙)                 |
-| **ファンクション** | 目的別の ON/OFF | `metrics`, `kafka`, `debug`    |
-| **環境**      | 実行基盤ごと      | `local`, `test`, `stg`, `prod` |
+Boot 3.5 の **`spring‑boot‑starter‑test`** は次の主なライブラリを同梱します。
 
-*アプリ起動時に `local,metrics` のような **複合指定** が推奨*。役割を縦横に分離することで **“local = prod – x”** の単純差分に収束する。
+* **JUnit Jupiter 5.11.x** – 標準テストエンジン
+* **AssertJ 3.25+** – Fluent 断言 API
+* **Hamcrest 2.2** – マッチャ DSL
+* **Mockito 5.11** – モック生成／スタブ
+* **JsonPath / Jackson‑Databind** – JSON 検証補助
+* **Spring Test** – `MockMvc`, `TestContext` など ([mvnrepository.com][1])
 
-### 10‑1‑2 `application-{profile}.yaml` だけに依存しない
+依存は *`testImplementation`* スコープに自動追加され、**プロダクション成果物に一切影響しない** 点が安心材料です。
 
-| 手法                            | 使い分け                                                        |                            |
-| ----------------------------- | ----------------------------------------------------------- | -------------------------- |
-| **`spring.profiles.group.*`** | 「ON にしたら自動で別プロファイルも入る」例：`metrics → prometheus,file-logging` |                            |
-| **Profile‑specific beans**    | 例：\`@Profile("kafka                                         | test & !prod")\` でコード単位の分岐 |
-| **Property activation**       | `logging.level.root: ${LOG_LEVEL:INFO}` で **環境変数だけ** 変える    |                            |
-
-> **ベストプラクティス** : 設定階層は **YAML < Env‑Var < CLI** を鉄則に。CI では `--spring.profiles.active=stg,metrics` を明示し「あと何が効いているのか」をログで確認する。
-
-### 10‑1‑3　ランタイム切り替えと DevTools
-
-* DevTools が有効な `local` プロファイルでのみ **自動再起動・LiveReload** を ON。
-* `spring.devtools.livereload.enabled=false` を SCM に固定し、「LOCAL\_PC=true」の環境変数で反転させるとコミット汚染を防げる。
-
----
-
-## 10‑2　外部設定 & 構成バリデーション
-
-### 10‑2‑1 `@ConfigurationProperties` でタイプセーフ設定
+### 9‑1‑2　最小ユニットテストの作法
 
 ```java
-@ConfigurationProperties(prefix = "payment")
-@Validated
-record PaymentProps(@NotNull URI endpoint,
-                    @Positive Duration timeout) { }
+@ExtendWith(MockitoExtension.class)
+class PriceCalculatorTests {
+
+  DiscountService disc = mock(DiscountService.class);
+
+  @Test
+  void totalIsCalculated() {
+    when(disc.rateFor("VIP")).thenReturn(0.2);
+    PriceCalculator calc = new PriceCalculator(disc);
+
+    assertThat(calc.total(1_000)).isEqualTo(800);
+    verify(disc).rateFor("VIP");
+  }
+}
 ```
 
-* **Immutable record+binder** が 3.x 推奨パターン。
-* `spring-boot-configuration-processor` を `annotationProcessor` 依存に追加すると **IDE 補完** が生きる。
+* **Arrange–Act–Assert** が一目でわかる構造を維持。
+* `@ExtendWith(MockitoExtension.class)` により **Mockito 用 JUnit 拡張**が自動注入。
 
-### 10‑2‑2　失敗を早く ― **Fail‑Fast 起動** にする
+### 9‑1‑3 `ApplicationContextRunner` で Auto‑config を検証
 
-| 手段                            | 効果                                       |
-| ----------------------------- | ---------------------------------------- |
-| `@Validated` + JSR‑380 注釈     | 値域エラーを **起動時に阻止**                        |
-| **FailureAnalyzer** 実装        | 例：秘密鍵が無い場合に *actionable message* を表示     |
-| `spring.beaninfo.ignore=true` | JavaBean Introspector をスキップし 5–10 % 起動短縮 |
+単体テスト層でも “設定どおり Bean が生えるか” を確かめたい場合は **`ApplicationContextRunner`** が最速。
 
-### 10‑2‑3　Config Data API と Secrets 管理
-
-```yaml
-spring:
-  config:
-    import:
-      - vault://secret/data/payment
-      - aws-parameterstore:/myapp/
-      - env:MY_K8S_SECRET        # 3.5 の multi‑line 変数
+```java
+new ApplicationContextRunner()
+  .withPropertyValues("mail.host=smtp.example.com")
+  .withUserConfiguration(MailAutoConfiguration.class)
+  .run(ctx -> assertThat(ctx).hasSingleBean(JavaMailSender.class));
 ```
 
-* 認証情報は **Vault/KMS/Secrets Manager** へ。絶対に Git に置かない。
-* **優先順序** : CLI > System prop > ENV > `application*` > Profile‑specific > Import。
-
-### 10‑2‑4　リロード & ローリング更新
-
-| 技術                                                     | 特徴                                                                                  |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| **Spring Cloud Config**                                | `@ConfigurationProperties` + `@RefreshScope` でオンメモリ置換                               |
-| **Kubernetes ConfigMap + `spring.cloud.kubernetes.*`** | `--spring.cloud.kubernetes.reload.strategy=restart` なら *Zero‑Downtime* Rolling と相性◎ |
-| **CRaC (Checkpoint/Restore)**                          | Properties を載せ替えてもキャッシュから復元可能（Boot 3.2+）                                            |
+* **起動 200–300 ms** 程度で済み、IDE での TDD が快適。
 
 ---
 
-## 10‑3　AOT 最適化と Project Leyden 展望
+## 9‑2　テストスライスと Web レイヤー検証
 
-### 10‑3‑1　`spring.aot.enabled=true` がもたらす効果
+### 9‑2‑1 `@WebMvcTest`（Servlet スタック）
 
-| 効果                       | 内容                            | 規模感\*     |
-| ------------------------ | ----------------------------- | --------- |
-| **Bean 定義静的化**           | 反射呼び出し → 直接 `new`             | 起動 −15 %  |
-| **クラスパススキャン削減**          | ターゲットパッケージをコード生成              | メモリ −10 % |
-| **プロキシ生成 Ahead‑Of‑Time** | CGLIB → JDK Proxy → ジェネレートソース | メタ領域 −8 % |
+```java
+@WebMvcTest(controllers = OrderController.class)      // ①
+class OrderControllerTests {
 
-\*Spring 社計測の “典型 50 Bean アプリ” 例。
+  @Autowired MockMvc mvc;
 
-```bash
-./mvnw -Pnative -DspringAot
+  @MockBean OrderService os;                          // ②
+
+  @Test
+  void happyPath() throws Exception {
+    given(os.findOne(42)).willReturn(new OrderDto(42, 900));
+
+    mvc.perform(get("/orders/42"))
+       .andExpect(status().isOk())
+       .andExpect(jsonPath("$.price").value(900));
+  }
+}
 ```
 
-で **JVM モード** でも AOT コードが動くため、「起動高速化だけ欲しい」場合に最適。
+① **MVC 関連 Bean のみロード**、DataSource などは読み込まない
+② `@MockBean` で依存サービスを差し替え ([docs.spring.io][2])
 
-### 10‑3‑2　AOT 向けコーディングガイド
+Boot 3.5 の `@WebMvcTest` はデフォルトで **Spring Security と MockMvc を自動構成**し、XSS・CSRF フィルターも本番同等に動作させられます。
 
-| NG パターン              | 置き換え                        | 理由           |
-| -------------------- | --------------------------- | ------------ |
-| 乱用 `Class.forName()` | `ObjectProvider<T>`         | リフレクションヒント不要 |
-| JDK ダイナミックプロキシ手動生成   | `@JdkProxyHint` + インタフェース設計 | 自動ヒントへ寄せる    |
-| SpEL in YAML         | Java Config / `@Bean`       | AST 解釈コスト削減  |
+### 9‑2‑2　代表的スライスアノテーション
 
-### 10‑3‑3　Project Leyden と “Static Image”
+| 用途         | アノテーション           | 主な自動構成                     |                       |
+| ---------- | ----------------- | -------------------------- | --------------------- |
+| WebFlux    | `@WebFluxTest`    | RouterFunction/WebClient   |                       |
+| JPA        | `@DataJpaTest`    | EntityManager/DataSource   |                       |
+| JSON       | `@JsonTest`       | ObjectMapper/JacksonTester |                       |
+| RestClient | `@RestClientTest` | `RestClient` + WireMock    | ([docs.spring.io][3]) |
 
-* OpenJDK 22+ で議論中の **CDS + AOT → static image** パスは、Boot AOT とほぼ同一のリフレクション排除思想。
-* 将来は **“Leyden target”** が Maven/Gradle プラグインに追加され、`nativeCompile` と並列運用される見込み。
+> **Tip** : スライスは **“狭く速く”**。テスト行数よりも「ロードする Bean の数」が速度を左右します。
 
-> **見据えるべきポイント** : Boot‑AOT は **「Leyden へ向けた予習」**。成果物フォーマットが変わっても、どの Bean が反射を使うかを**今のうちに潰しておく**ことが移行コストを最小化する鍵。
+### 9‑2‑3　セキュリティ付きスライス
 
----
-
-## 10‑4　コードベース設計・運用ベストプラクティス（抜粋）
-
-| カテゴリ                 | 推奨                                                        | Why               |
-| -------------------- | --------------------------------------------------------- | ----------------- |
-| **パッケージ構造**          | `web → service → repository → domain` の **縦分割**           | スライステスト時のスキャン制御が楽 |
-| **DTO への MapStruct** | サービス層で `Mapper` インタフェースを DI                               | リフレクション不要＋Null 安全 |
-| **共通ユーティリティ**        | `spring-boot-starter-<corp>` + Auto‑config                | コードコピーをスターターへ昇格   |
-| **依存更新**             | Dependabot + `./mvnw versions:display-dependency-updates` | CVE を当日中に検知       |
-| **静的解析**             | ErrorProne / SpotBugs AOT モジュールへ hook                     | Native ヒント漏れも同時発見 |
+`@WithMockUser` を併用するとテストごとに仮想認証情報が注入され、`403` → `200` の期待値だけ変えて安全確認ができます（第 8 章参照）。
 
 ---
 
-## 10‑5　観測性・ログ設計ベストプラクティス
+## 9‑3　統合テストと Testcontainers 2.x
 
-| 項目                   | ベースライン                                                          |
-| -------------------- | --------------------------------------------------------------- |
-| ログ形式                 | `logging.structured.json.format=ecs` で **ECS‑JSON** 統一          |
-| ID 伝搬                | `logging.structured.correlation.enabled=true` → `trace_id` 自動付与 |
-| メトリクス Tag            | 不変 (`region`,`app`,`instance`) と変動 (`status`) を分離               |
-| High‑cardinality ガード | `MeterFilter.deny(id -> id.getTag("userId")!=null)`             |
-| 分布ヒストグラム             | HTTP, DB, Kafka すべてに `percentiles-histogram` を設定                |
+### 9‑3‑1 `@ServiceConnection` で “ゼロ設定” コンテナ
+
+```java
+@Testcontainers
+@SpringBootTest
+class RepositoryIT {
+
+  @Container                                     // ①
+  @ServiceConnection                              // ②
+  static PostgreSQLContainer<?> db =
+      new PostgreSQLContainer<>("postgres:16-alpine");
+
+}
+```
+
+① テストクラス起動時に **Docker で Postgres を生成**
+② `@ServiceConnection` により **JDBC URL／資格情報が自動で `DataSource` に注入** ([docs.spring.io][4], [docs.spring.io][5])
+
+Boot 3.5 の Service Connection は **Kafka・Redis・MongoDB など 15+ テクノロジ**を標準サポートし、**SSL バンドル**も透過的に取り扱います ([infoq.com][6])。
+
+### 9‑3‑2　SSL/E2E テストの強化
+
+```java
+@Container
+@Ssl(bundle="local-trust")              // ①
+@ServiceConnection
+static KafkaContainer<?> kafka =
+        new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:8"));
+
+@Test
+void produce_and_consume() {...}
+```
+
+① `@Ssl` で **証明書をコンテナ起動時に抽出 → テスト側へ束ねて注入** ([infoq.com][6])
+
+### 9‑3‑3　動的プロパティとパラレル実行
+
+* 旧式の `@DynamicPropertySource` は引き続き利用可能ですが、ServiceConnection 使用時は不要。
+* **JUnit 5 Parallel Execution** (`junit.jupiter.execution.parallel.enabled=true`) と組み合わせる場合は **Reusable Containers** パターン（`startOnce()`）で大幅な時間短縮が可能 ([medium.com][7])。
+
+---
+
+## 9‑4　観測性テスト — メトリクス & トレース検証
+
+### 9‑4‑1　`MeterRegistry` のアサーション
+
+```java
+@Autowired MeterRegistry registry;
+
+@Test
+void orderGaugeUpdated() {
+  service.placeOrder(99);
+  assertThat(registry.get("orders.submitted").counter().count())
+      .isEqualTo(1);
+}
+```
+
+* **Micrometer 直接 Assert** で数値の変化を即検証。
+* レイテンシ分位数を確認したい場合は `metricsEndpoint.metric("http.server.requests", List.of("uri","/orders"))` を利用。
+
+### 9‑4‑2　分散トレーシングの録画テスト
+
+`@SpringBootTest` + `ZipkinContainer` を起動し、`/dependencies` API を Polling→Assert することで **Span 間の親子関係** を自動検証できる。
+
+---
+
+## 9‑5　ベストプラクティス集
+
+| シチュエーション                 | 推奨事項                                                   | 背景               |
+| ------------------------ | ------------------------------------------------------ | ---------------- |
+| **テスト専用設定**              | `application-test.yaml` と `@ActiveProfiles("test")`    | 本番プロパティ汚染を防ぐ     |
+| **Bean 再利用で高速化**         | `@DirtiesContext` を安易に多用しない                            | コンテナ再生成コスト増      |
+| **乱数・現在時刻**              | `Clock` インタフェースを DI → モック                              | 再現性確保            |
+| **Testcontainers キャッシュ** | `~/.testcontainers` → CI アーティファクト化                     | ネットワーク依存低減       |
+| **Mutation Testing**     | Pitest + JUnit 5                                       | 分岐網羅率より実効カバレッジ   |
+| **CI 並列化**               | Maven Surefire `junit5.parallel` + Reusable Containers | 30–50 % スループット向上 |
 
 ---
 
 ### まとめ
 
-本章では **プロファイル階層設計・外部設定の型安全化・AOT/Static Image を見据えた最適化** といった “アプリ全体の非機能品質” を高める指針を整理しました。次章の付録では、ここで触れたプロパティやスターターの **逆引きリファレンス** を一括掲載します。
+本章では **ユニット（JUnit + Mockito）→ スライス（`@WebMvcTest` 等）→ 統合（Testcontainers + Service Connection）** と段階的に深度を増すテスト戦略を体系化しました。Boot 3.5 の Testcontainers 連携により “データベースの起動すらコード 1 行” で完結し、SSL/メトリクスを含む実運用同等の E2E テストが容易になっています。次章では、これらテスト結果を最大化する **ベストプラクティス & AOT 最適化** をさらに掘り下げます。
+
+[1]: https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-starter-test/3.5.0-M1?utm_source=chatgpt.com "spring-boot-starter-test » 3.5.0-M1 - Maven Repository"
+[2]: https://docs.spring.io/spring-boot/3.5/api/java/org/springframework/boot/test/autoconfigure/web/servlet/WebMvcTest.html?utm_source=chatgpt.com "WebMvcTest (Spring Boot 3.5.0 API)"
+[3]: https://docs.spring.io/spring-boot/appendix/test-auto-configuration/slices.html?utm_source=chatgpt.com "Test Slices :: Spring Boot"
+[4]: https://docs.spring.io/spring-boot/api/java/org/springframework/boot/testcontainers/service/connection/ServiceConnection.html?utm_source=chatgpt.com "ServiceConnection (Spring Boot 3.5.0 API)"
+[5]: https://docs.spring.io/spring-boot/reference/testing/testcontainers.html?utm_source=chatgpt.com "Testcontainers :: Spring Boot"
+[6]: https://www.infoq.com/news/2025/05/spring-boot-3-5/?utm_source=chatgpt.com "Spring Boot 3.5 Delivers Improved Configuration, Containers, and ..."
+[7]: https://medium.com/%40mrayandutta/reliable-spring-boot-integration-testing-with-testcontainers-2aaf2556c53e?utm_source=chatgpt.com "Reliable Spring Boot Integration Testing with Testcontainers - Medium"
